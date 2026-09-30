@@ -16,7 +16,7 @@ import java.util.Map;
  */
 public final class Main {
 
-    private static final String VERSION = "0.1.0";
+    private static final String VERSION = "0.2.0";
 
     public static void main(String[] args) {
         if (args.length == 0) {
@@ -28,6 +28,15 @@ public final class Main {
             switch (command) {
                 case "split":
                     System.exit(cmdSplit(args));
+                    break;
+                case "check":
+                    System.exit(cmdCheck(args));
+                    break;
+                case "gate":
+                    System.exit(cmdGate(args));
+                    break;
+                case "assemble":
+                    System.exit(cmdAssemble(args));
                     break;
                 case "version":
                     System.out.println("g2s-core " + VERSION);
@@ -47,10 +56,139 @@ public final class Main {
         System.err.println();
         System.err.println("命令:");
         System.err.println("  split --in <file> [--out <dir>] [--max-lines N] [--max-statements N]");
+        System.err.println("  check    --run <run_dir> [--repo <repo_root>]");
+        System.err.println("  gate     --run <run_dir> [--repo <repo_root>]");
+        System.err.println("  assemble --run <run_dir> [--repo <repo_root>] [--allow-partial]");
+        System.err.println("           [--model-host X] [--model-name Y] [--verification-tier Z]");
         System.err.println("  version");
         System.err.println();
         System.err.println("split 说明: 切分 SQL 文件并按阈值判定走直通还是分片路径，");
         System.err.println("            输出 <dir>/statements.jsonl 与 <dir>/split_summary.json。");
+        System.err.println("check 说明:  校验产物契约（字段、枚举、规则 id、阶段完整性）。");
+        System.err.println("gate 说明:   统计档位、比对审批记录，决定能否产出最终 SQL。");
+        System.err.println("assemble 说明: 产出最终 SQL、过程文档、审计报告与运行清单。");
+    }
+
+    /** 仓库根：优先 --repo，其次从 run 目录向上查找含 rules/index.json 的目录。 */
+    private static Path resolveRepoRoot(Map<String, String> opts, Path runDir) {
+        String repo = opts.get("repo");
+        if (repo != null) {
+            return Paths.get(repo).toAbsolutePath().normalize();
+        }
+        Path start = runDir.toAbsolutePath().normalize();
+        for (Path p = start; p != null; p = p.getParent()) {
+            if (Files.exists(p.resolve("rules")) && Files.exists(p.resolve("tools"))) {
+                return p;
+            }
+        }
+        Path cwd = Paths.get("").toAbsolutePath().normalize();
+        for (Path p = cwd; p != null; p = p.getParent()) {
+            if (Files.exists(p.resolve("rules")) && Files.exists(p.resolve("tools"))) {
+                return p;
+            }
+        }
+        return cwd;
+    }
+
+    private static Path requireRunDir(Map<String, String> opts) {
+        String run = opts.get("run");
+        if (run == null) {
+            System.err.println("需要 --run <run_dir>");
+            return null;
+        }
+        Path dir = Paths.get(run);
+        if (!Files.isDirectory(dir)) {
+            System.err.println("run 目录不存在: " + dir.toAbsolutePath());
+            return null;
+        }
+        return dir;
+    }
+
+    private static int cmdCheck(String[] args) throws IOException {
+        Map<String, String> opts = parseOptions(args);
+        Path runDir = requireRunDir(opts);
+        if (runDir == null) {
+            return 2;
+        }
+        WorkflowContext ctx = WorkflowContext.load(runDir, resolveRepoRoot(opts, runDir));
+        ctx.contract.print();
+        if (!ctx.index.available) {
+            System.out.println("注意: " + ctx.index.note);
+        }
+        int errors = ctx.contract.errors.size();
+        System.out.println("契约校验: 语句 " + ctx.statements.size()
+                + "，分析 " + ctx.analysis.size()
+                + "，转换 " + ctx.conversion.size()
+                + "，审核 " + ctx.review.size()
+                + "，纠错 " + ctx.fix.size()
+                + "，审批 " + ctx.approvals.size()
+                + "；错误 " + errors + "，警告 " + ctx.contract.warnings.size());
+        return errors > 0 ? 1 : 0;
+    }
+
+    private static int cmdGate(String[] args) throws IOException {
+        Map<String, String> opts = parseOptions(args);
+        Path runDir = requireRunDir(opts);
+        if (runDir == null) {
+            return 2;
+        }
+        WorkflowContext ctx = WorkflowContext.load(runDir, resolveRepoRoot(opts, runDir));
+        Gate.Result gate = Gate.evaluate(ctx);
+        printGate(ctx, gate);
+        if (gate.passed) {
+            return 0;
+        }
+        return 3;
+    }
+
+    private static int cmdAssemble(String[] args) throws IOException {
+        Map<String, String> opts = parseOptions(args);
+        Path runDir = requireRunDir(opts);
+        if (runDir == null) {
+            return 2;
+        }
+        WorkflowContext ctx = WorkflowContext.load(runDir, resolveRepoRoot(opts, runDir));
+        Gate.Result gate = Gate.evaluate(ctx);
+        printGate(ctx, gate);
+
+        Assemble.Options aopts = new Assemble.Options();
+        aopts.allowPartial = "true".equals(opts.get("allow-partial"));
+        aopts.modelHost = opts.getOrDefault("model-host", "unknown");
+        aopts.modelName = opts.getOrDefault("model-name", "unknown");
+        aopts.verificationTier = opts.getOrDefault("verification-tier", "static-only");
+        aopts.toolVersion = VERSION;
+
+        if (!gate.passed && !aopts.allowPartial) {
+            System.err.println();
+            System.err.println("闸门未放行，未产出最终 SQL。");
+            System.err.println("请补完审批记录后重试，或在明确接受残缺输出时加 --allow-partial。");
+            return 3;
+        }
+        Assemble.run(ctx, gate, aopts);
+        System.out.println();
+        System.out.println("已产出:");
+        System.out.println("  " + runDir.resolve(Run.FINAL_SQL));
+        System.out.println("  " + runDir.resolve(Run.PROCESS_LOG));
+        System.out.println("  " + runDir.resolve(Run.AUDIT_REPORT));
+        System.out.println("  " + runDir.resolve(Run.MANIFEST));
+        return gate.passed ? 0 : 3;
+    }
+
+    private static void printGate(WorkflowContext ctx, Gate.Result gate) {
+        ctx.contract.print();
+        System.out.println("语句总数    : " + gate.total);
+        System.out.println("auto        : " + gate.auto + "（自动放行）");
+        System.out.println("confirm     : " + gate.confirm);
+        System.out.println("blocked     : " + gate.blocked);
+        System.out.println("已获确认    : " + gate.approved);
+        System.out.println("仍待确认    : " + gate.unresolvedCount());
+        for (String id : gate.unresolvedIds) {
+            System.out.println("  待处理 " + id + " : " + gate.unresolvedReasons.getOrDefault(id, ""));
+        }
+        System.out.println("闸门        : " + (gate.passed ? "放行" : "未放行"));
+        if (!ctx.contract.ok()) {
+            System.out.println("说明        : 契约校验存在错误，闸门一律不放行");
+        }
     }
 
     private static Map<String, String> parseOptions(String[] args) {

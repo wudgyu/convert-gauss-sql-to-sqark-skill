@@ -12,7 +12,7 @@ runs/<run_id>/
   02_conversion.jsonl     转换记录（含思考过程）
   03_review.jsonl         审核记录
   04_fix.jsonl            纠错记录（可缺省）
-  approvals.yaml          人工确认记录（可缺省）
+  approvals.jsonl         人工确认记录（可缺省）
   05_final.sql            最终 SQL（仅闸门放行时产出）
   06_process-log.md       转换过程文档
   07_audit-report.md      审计报告
@@ -137,17 +137,17 @@ runs/<run_id>/
 每轮修复必须有 `round`，同一语句最多 2 轮。第 2 轮后仍未解决的，
 不得继续循环，必须转为 `needs_manual` 并进审批清单。
 
-## approvals.yaml（人工确认）
+## approvals.jsonl（人工确认）
 
-```yaml
-approvals:
-  - statement_id: s0007
-    action: accept-converted      # accept-converted | use-manual | exclude
-    by: "张三"
-    at: "2026-09-30T18:00:00+08:00"
-    note: "键值改由写入侧生成，已确认"
-    manual_sql: ""                # action=use-manual 时必填
+每行一条记录：
+
+```json
+{"statement_id":"s0007","action":"accept-converted","by":"张三","at":"2026-09-30T18:00:00+08:00","note":"键值改由写入侧生成，已确认","manual_sql":""}
 ```
+
+`action` 取 `accept-converted`（接受转换结果）、`use-manual`（改用人工 SQL）、
+`exclude`（排除该语句）。`action` 为 `use-manual` 时 `manual_sql` 必填；
+`by` 与 `at` 必填，用于追溯确认人与确认时间。
 
 ## run_manifest.json（运行清单）
 

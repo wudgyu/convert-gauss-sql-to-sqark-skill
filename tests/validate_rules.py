@@ -12,39 +12,12 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+
+from rule_index_lib import build_index, index_json, load_yaml  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RULES_DIR = REPO_ROOT / "rules"
-
-
-class StrictLoader(yaml.SafeLoader):
-    """拒绝重复键的加载器。
-
-    YAML 默认允许重复键且后者覆盖前者，这会让规则里出现两个 tier 时静默生效一个，
-    正是本规则库最需要避免的歧义，因此必须当成错误处理。
-    """
-
-
-def _construct_mapping_no_duplicates(loader, node):
-    loader.flatten_mapping(node)
-    mapping = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=True)
-        if key in mapping:
-            raise yaml.constructor.ConstructorError(
-                None, None, f"重复的键: {key}", key_node.start_mark
-            )
-        mapping[key] = loader.construct_object(value_node, deep=True)
-    return mapping
-
-
-StrictLoader.add_constructor(
-    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping_no_duplicates
-)
-
-
-def load_yaml(path):
-    return yaml.load(path.read_text(encoding="utf-8"), Loader=StrictLoader)
-
 
 KINDS = {"rewrite", "block", "note"}
 TIERS = {"auto", "confirm", "blocked"}
@@ -173,6 +146,14 @@ def main():
                 check_rule(rule, str(rel))
         else:
             warn(f"{rel}: 既不是规则列表也没有 rules 键，跳过")
+
+    # 机器可读索引必须与 YAML 规则库一致，否则 Java 侧的规则 id 校验会失真
+    expected = index_json(build_index(REPO_ROOT))
+    index_json_path = RULES_DIR / "index.json"
+    if not index_json_path.exists():
+        err("缺少 rules/index.json，请运行 tools/gen_rule_index.py")
+    elif index_json_path.read_text(encoding="utf-8") != expected:
+        err("rules/index.json 与规则库不一致，请重新运行 tools/gen_rule_index.py")
 
     return report()
 

@@ -1,0 +1,3 @@
+{"statement_id":"s0001","action":"accept-converted","by":"张三","at":"2026-09-30T18:00:00+08:00","note":"键值改由写入侧生成，JSON 运算符问题已在风险项中记录","manual_sql":""}
+{"statement_id":"s0003","action":"exclude","by":"张三","at":"2026-09-30T18:00:00+08:00","note":"序列无法迁移，改由应用层生成键值","manual_sql":""}
+{"statement_id":"s0004","action":"accept-converted","by":"张三","at":"2026-09-30T18:00:00+08:00","note":"目标表为支持事务的表格式，UPDATE 可执行","manual_sql":""}

@@ -27,7 +27,8 @@ PL 块与 psql 元命令明确不支持。测试覆盖版本只有 4.2.0，其�
 3. 运行 ./g2s split --in 输入文件 --out run目录，得到 statements.jsonl 与路由判定。
 4. 依次执行 gauss2spark-analyze、gauss2spark-convert、gauss2spark-review。
    审核产出 revise 时执行 gauss2spark-fix 并回到审核，最多 2 轮。
-5. 执行闸门：统计三个档位的条数并比对 approvals.yaml。
+5. 执行闸门：运行 ./g2s gate --run run目录。它统计三个档位的条数、比对
+   approvals.jsonl，并给出退出码（放行 0，未放行 3）。
 6. 组装产物：放行时产出 05_final.sql；无论是否放行都要产出 06_process-log.md、
    07_audit-report.md 与 run_manifest.json。
 

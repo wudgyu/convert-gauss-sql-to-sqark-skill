@@ -1,0 +1,333 @@
+{
+  "generated_by": "tools/gen_rule_index.py",
+  "index_version": "0.1.0",
+  "spark_target": "4.2.0",
+  "source_dialect": "openGauss (DBCOMPATIBILITY = PG)",
+  "files": {
+    "rules/core/010-type-mapping.yaml": "eb3f4f3efa452d5b49e497b7f730bcbabcb160a3281ef5eafda38a60dd9c13d9",
+    "rules/core/020-ordering-null.yaml": "288691818d6c68f84b28f12cf9bfc992db559d0a8c7f60d5b5ba8e5605c70c69",
+    "rules/core/030-null-semantics.yaml": "27363feda50e0a01e7381de1d0fd231d6bb1a49116f3c31a55feea28ab77ada8",
+    "rules/core/040-scalar-functions.yaml": "be811906daf2dc514270dbb38123d5cecfeb7c5855f042e0f86dbfc9e3f044d0",
+    "rules/core/050-datetime-format.yaml": "1c0a8990234fcebf2a7804fa99cbe2925fcfacb84dd80e0d898451940e32e075",
+    "rules/core/060-ddl.yaml": "3c67893fbb74dda690c9a81178364150deb2c8e0eaaf4d2d701229b2240c22e9",
+    "rules/unsupported.yaml": "d38aeb82c7138834eaf833136feb7d114e0e931dcbb7c97c7e1edc15a6a5e266",
+    "rules/index.yaml": "85e9c4882c172f355a6f6abcd29d53c6ef5dbf87d25c56a05d0cb2c1c520c2e3"
+  },
+  "rules": {
+    "block.async": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "low",
+      "file": "rules/unsupported.yaml"
+    },
+    "block.copy": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "high",
+      "file": "rules/unsupported.yaml"
+    },
+    "block.cursor": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "medium",
+      "file": "rules/unsupported.yaml"
+    },
+    "block.dml-requires-v2": {
+      "tier": "confirm",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "high",
+      "file": "rules/unsupported.yaml"
+    },
+    "block.extension": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "medium",
+      "file": "rules/unsupported.yaml"
+    },
+    "block.index": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "medium",
+      "file": "rules/unsupported.yaml"
+    },
+    "block.maintenance": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "low",
+      "file": "rules/unsupported.yaml"
+    },
+    "block.materialized-view": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "medium",
+      "file": "rules/unsupported.yaml"
+    },
+    "block.meta-command": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "medium",
+      "file": "rules/unsupported.yaml"
+    },
+    "block.pl-block": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "high",
+      "file": "rules/unsupported.yaml"
+    },
+    "block.prepared": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "low",
+      "file": "rules/unsupported.yaml"
+    },
+    "block.privilege": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "medium",
+      "file": "rules/unsupported.yaml"
+    },
+    "block.sequence": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "high",
+      "file": "rules/unsupported.yaml"
+    },
+    "block.transaction": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "medium",
+      "file": "rules/unsupported.yaml"
+    },
+    "core.array-agg.keep": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "note",
+      "risk": "high",
+      "file": "rules/core/030-null-semantics.yaml"
+    },
+    "core.concat.null-semantics": {
+      "tier": "confirm",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "medium",
+      "file": "rules/core/030-null-semantics.yaml"
+    },
+    "core.datetime.date-trunc-case": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "note",
+      "risk": "low",
+      "file": "rules/core/050-datetime-format.yaml"
+    },
+    "core.datetime.format-tokens": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "medium",
+      "file": "rules/core/050-datetime-format.yaml"
+    },
+    "core.datetime.to-char": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "medium",
+      "file": "rules/core/050-datetime-format.yaml"
+    },
+    "core.datetime.to-date-timestamp": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "medium",
+      "file": "rules/core/050-datetime-format.yaml"
+    },
+    "core.ddl.comment-on-column": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "low",
+      "file": "rules/core/060-ddl.yaml"
+    },
+    "core.ddl.comment-on-table": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "note",
+      "risk": "low",
+      "file": "rules/core/060-ddl.yaml"
+    },
+    "core.ddl.default-nextval": {
+      "tier": "confirm",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "high",
+      "file": "rules/core/060-ddl.yaml"
+    },
+    "core.ddl.distribute-by": {
+      "tier": "confirm",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "high",
+      "file": "rules/core/060-ddl.yaml"
+    },
+    "core.ddl.native-forms": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "note",
+      "risk": "low",
+      "file": "rules/core/060-ddl.yaml"
+    },
+    "core.ddl.partition-by": {
+      "tier": "confirm",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "medium",
+      "file": "rules/core/060-ddl.yaml"
+    },
+    "core.ddl.storage-clause": {
+      "tier": "confirm",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "medium",
+      "file": "rules/core/060-ddl.yaml"
+    },
+    "core.ddl.temp-table": {
+      "tier": "confirm",
+      "status": "candidate",
+      "kind": "rewrite",
+      "risk": "medium",
+      "file": "rules/core/060-ddl.yaml"
+    },
+    "core.functions.gen-random-uuid": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "low",
+      "file": "rules/core/040-scalar-functions.yaml"
+    },
+    "core.functions.generate-series": {
+      "tier": "confirm",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "medium",
+      "file": "rules/core/040-scalar-functions.yaml"
+    },
+    "core.functions.native": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "note",
+      "risk": "low",
+      "file": "rules/core/040-scalar-functions.yaml"
+    },
+    "core.functions.pg-catalog": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "high",
+      "file": "rules/core/040-scalar-functions.yaml"
+    },
+    "core.functions.regex-operator": {
+      "tier": "confirm",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "medium",
+      "file": "rules/core/040-scalar-functions.yaml"
+    },
+    "core.functions.sha256": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "low",
+      "file": "rules/core/040-scalar-functions.yaml"
+    },
+    "core.functions.strpos": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "low",
+      "file": "rules/core/040-scalar-functions.yaml"
+    },
+    "core.functions.sysdate": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "low",
+      "file": "rules/core/040-scalar-functions.yaml"
+    },
+    "core.functions.unnest": {
+      "tier": "confirm",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "medium",
+      "file": "rules/core/040-scalar-functions.yaml"
+    },
+    "core.greatest-least.aligned": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "note",
+      "risk": "low",
+      "file": "rules/core/030-null-semantics.yaml"
+    },
+    "core.orderby.nulls-default": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "medium",
+      "file": "rules/core/020-ordering-null.yaml"
+    },
+    "core.type-map.array": {
+      "tier": "confirm",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "medium",
+      "file": "rules/core/010-type-mapping.yaml"
+    },
+    "core.type-map.money": {
+      "tier": "confirm",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "medium",
+      "file": "rules/core/010-type-mapping.yaml"
+    },
+    "core.type-map.numeric-precision": {
+      "tier": "confirm",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "high",
+      "file": "rules/core/010-type-mapping.yaml"
+    },
+    "core.type-map.scalar": {
+      "tier": "auto",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "low",
+      "file": "rules/core/010-type-mapping.yaml"
+    },
+    "core.type-map.timezone": {
+      "tier": "confirm",
+      "status": "enabled",
+      "kind": "rewrite",
+      "risk": "high",
+      "file": "rules/core/010-type-mapping.yaml"
+    },
+    "core.type-map.unsupported": {
+      "tier": "blocked",
+      "status": "enabled",
+      "kind": "block",
+      "risk": "high",
+      "file": "rules/core/010-type-mapping.yaml"
+    }
+  }
+}

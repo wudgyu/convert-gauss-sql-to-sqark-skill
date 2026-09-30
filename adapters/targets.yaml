@@ -1,0 +1,38 @@
+# 各 CLI 宿主的 skill 安装位置。
+#
+# verified 表示该目录约定是否经过实测确认。未实测的条目在使用安装脚本时
+# 必须显式提供 --dir，以免把技能装到错误的位置。
+
+hosts:
+  claude:
+    display_name: Claude Code
+    skills_dir: ~/.claude/skills
+    verified: true
+    notes: 通用 Agent Skills 目录约定
+  codex:
+    display_name: Codex
+    skills_dir: ~/.codex/skills
+    verified: true
+    notes: 已在本机确认该目录存在
+  opencode:
+    display_name: opencode
+    skills_dir: ~/.config/opencode/skill
+    verified: false
+    notes: 未实测。本机没有 opencode 安装，目录约定需实地确认后更新本文件
+  trae:
+    display_name: Trae
+    skills_dir: ~/.trae/skills
+    verified: false
+    notes: 未实测，需实地确认
+  codebuddy:
+    display_name: CodeBuddy
+    skills_dir: ~/.codebuddy/skills
+    verified: false
+    notes: 未实测，需实地确认
+
+install:
+  mode: symlink
+  note: |
+    采用符号链接而不是复制。原因：工作流要求六个 skill 与仓库一并可用，
+    skill 正文里的 contracts/、rules/、checklist/ 引用按仓库根解析；
+    复制到别处会导致这些引用失效，工作流会静默降级。

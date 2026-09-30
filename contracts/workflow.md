@@ -76,7 +76,8 @@ analyze → convert → review → fix ─┐
 1. 只有 `auto` 自动放行。
 2. 任一 `confirm` 或 `blocked` 语句没有对应的审批记录时，**不产出最终 SQL**，
    退出码非零，并输出阻断清单。
-3. 人工确认有三种处置：接受转换结果、提供人工 SQL、或排除该语句。
+3. 人工确认有三种处置：接受转换结果（`accept-converted`）、提供人工 SQL（`use-manual`）、
+   排除该语句（`exclude`），一律记录在 `approvals.jsonl` 中。
    人工补写的 SQL 同样进入最终文件，并在审计报告中标记来源为人工。
 4. 只有显式传入 `--allow-partial` 才产出残缺版本，且必须带显著提示头。
 

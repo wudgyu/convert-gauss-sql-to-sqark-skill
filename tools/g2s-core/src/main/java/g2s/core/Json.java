@@ -87,4 +87,38 @@ public final class Json {
         }
         return sb.append('}').toString();
     }
+
+    /** 序列化任意取值（String / Number / Boolean / null / List / Map）。 */
+    public static String value(Object o) {
+        if (o == null) {
+            return "null";
+        }
+        if (o instanceof Boolean || o instanceof Number) {
+            return String.valueOf(o);
+        }
+        if (o instanceof List) {
+            StringBuilder sb = new StringBuilder("[");
+            List<?> list = (List<?>) o;
+            for (int k = 0; k < list.size(); k++) {
+                if (k > 0) {
+                    sb.append(',');
+                }
+                sb.append(value(list.get(k)));
+            }
+            return sb.append(']').toString();
+        }
+        if (o instanceof Map) {
+            StringBuilder sb = new StringBuilder("{");
+            boolean first = true;
+            for (Map.Entry<?, ?> e : ((Map<?, ?>) o).entrySet()) {
+                if (!first) {
+                    sb.append(',');
+                }
+                first = false;
+                sb.append(str(String.valueOf(e.getKey()))).append(':').append(value(e.getValue()));
+            }
+            return sb.append('}').toString();
+        }
+        return str(String.valueOf(o));
+    }
 }
