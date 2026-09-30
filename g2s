@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# g2s 工具入口。自动定位仓库根目录并调用构建产物。
+# 定位顺序: $G2S_HOME -> 本脚本所在目录
+
+set -euo pipefail
+
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+    LINK="$(readlink "$SELF")"
+    case "$LINK" in
+        /*) SELF="$LINK" ;;
+        *) SELF="$(dirname "$SELF")/$LINK" ;;
+    esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
+
+if [ -n "${G2S_HOME:-}" ] && [ -f "$G2S_HOME/tools/bin/g2s-core.jar" ]; then
+    REPO_ROOT="$G2S_HOME"
+else
+    REPO_ROOT="$SCRIPT_DIR"
+fi
+
+CORE_JAR="$REPO_ROOT/tools/bin/g2s-core.jar"
+if [ ! -f "$CORE_JAR" ]; then
+    echo "未找到 $CORE_JAR，请先运行 tools/build.sh" >&2
+    exit 2
+fi
+
+CP="$CORE_JAR"
+SPARK_JAR="$REPO_ROOT/tools/bin/g2s-spark.jar"
+if [ -f "$SPARK_JAR" ]; then
+    CP="$CP:$SPARK_JAR"
+    if [ -f "$REPO_ROOT/tools/bin/spark-home.txt" ]; then
+        CACHED_SPARK_HOME="$(cat "$REPO_ROOT/tools/bin/spark-home.txt")"
+        CP="$CP:$CACHED_SPARK_HOME/jars/*"
+    fi
+fi
+
+exec java -cp "$CP" g2s.core.Main "$@"
