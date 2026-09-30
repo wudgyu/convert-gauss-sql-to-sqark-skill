@@ -28,10 +28,190 @@ public final class Assemble {
         writeProcessLog(ctx, gate, ordered);
         writeAuditReport(ctx, gate, opts);
         writeManifest(ctx, gate, opts);
+        writeHtmlReport(ctx, gate, opts, ordered);
         ctx.run.trace("assemble", Map.of(
                 "statements", ordered.size(),
                 "verification_tier", opts.verificationTier,
                 "allow_partial", opts.allowPartial));
+    }
+
+    // ---- 08_report.html ----
+
+    private static void writeHtmlReport(WorkflowContext ctx, Gate.Result gate, Options opts,
+                                        List<Map<String, Object>> ordered) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<!DOCTYPE html>\n<html lang=\"zh-CN\"><head><meta charset=\"utf-8\">\n");
+        sb.append("<title>gauss2spark 转换报告</title>\n<style>\n");
+        sb.append("body{font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;"
+                + "margin:0;padding:24px;background:#f6f7f9;color:#1f2328;line-height:1.6}\n");
+        sb.append("h1{font-size:22px;margin:0 0 4px}h2{font-size:17px;margin:28px 0 8px}\n");
+        sb.append("h3{font-size:15px;margin:0 0 8px}h4{font-size:13px;color:#57606a;margin:0 0 4px}\n");
+        sb.append(".card{background:#fff;border:1px solid #d0d7de;border-radius:8px;"
+                + "padding:16px;margin-bottom:14px}\n");
+        sb.append("pre{background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;padding:10px;"
+                + "overflow:auto;font-size:12px;margin:0;white-space:pre-wrap}\n");
+        sb.append(".grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}\n");
+        sb.append("table{border-collapse:collapse;width:100%;background:#fff;font-size:13px}\n");
+        sb.append("th,td{border:1px solid #d0d7de;padding:6px 8px;text-align:left}\n");
+        sb.append("th{background:#f6f8fa}\n");
+        sb.append(".tag{display:inline-block;padding:1px 7px;border-radius:10px;font-size:12px;"
+                + "margin-right:6px}\n");
+        sb.append(".auto{background:#dafbe1;color:#1a7f37}.confirm{background:#fff8c5;color:#7d4e00}\n");
+        sb.append(".blocked{background:#ffebe9;color:#cf222e}\n");
+        sb.append(".pass{background:#dafbe1;color:#1a7f37}.revise{background:#fff8c5;color:#7d4e00}\n");
+        sb.append(".block{background:#ffebe9;color:#cf222e}\n");
+        sb.append("dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:12px 0 0;"
+                + "font-size:13px}\ndt{color:#57606a}\ndd{margin:0}\n");
+        sb.append(".meta{color:#57606a;font-size:13px}.warn{background:#fff8c5;border-color:#d4a72c}\n");
+        sb.append("</style></head><body>\n");
+
+        sb.append("<h1>gauss2spark 转换报告</h1>\n");
+        sb.append("<div class=\"meta\">输入 ").append(esc(inputName(ctx)))
+                .append(" ｜ 目标方言 Spark SQL ").append(esc(orEmpty(ctx.index.sparkTarget, "4.2.0")))
+                .append(" ｜ 校验档位 ").append(esc(opts.verificationTier))
+                .append(" ｜ 模型 ").append(esc(opts.modelHost)).append(" / ")
+                .append(esc(opts.modelName)).append("</div>\n");
+
+        sb.append("<div class=\"card\"><h3>闸门状态: ")
+                .append(gate.passed ? "已放行" : "未放行").append("</h3>")
+                .append("<div class=\"meta\">语句 ").append(gate.total)
+                .append(" 条 ｜ auto ").append(gate.auto)
+                .append(" ｜ confirm ").append(gate.confirm)
+                .append(" ｜ blocked ").append(gate.blocked)
+                .append(" ｜ 已确认 ").append(gate.approved)
+                .append(" ｜ 待确认 ").append(gate.unresolvedCount()).append("</div>");
+        if (!"execution-verified".equals(opts.verificationTier)) {
+            sb.append("<div class=\"card warn\" style=\"margin:12px 0 0\">")
+                    .append("本次结果未经真实数据执行验证，仅完成到 ")
+                    .append(esc(opts.verificationTier)).append(" 档位。</div>");
+        }
+        sb.append("</div>\n");
+
+        sb.append("<h2>语句一览</h2>\n<table><tr><th>语句</th><th>类型</th><th>行号</th>"
+                + "<th>档位</th><th>结果</th><th>来源</th><th>审核</th><th>确认</th></tr>\n");
+        for (Map<String, Object> st : ordered) {
+            String id = JsonParser.str(st, "statement_id");
+            Map<String, Object> an = ctx.analysis.get(id);
+            Map<String, Object> cv = ctx.conversion.get(id);
+            Map<String, Object> rv = ctx.review.get(id);
+            Map<String, Object> ap = ctx.approvals.get(id);
+            String tier = an == null ? "-" : JsonParser.str(an, "tier");
+            sb.append("<tr><td><a href=\"#").append(esc(id)).append("\">").append(esc(id)).append("</a></td>")
+                    .append("<td>").append(esc(orEmpty(JsonParser.str(st, "kind"), "-"))).append("</td>")
+                    .append("<td>").append(JsonParser.num(st, "start_line", 0)).append("-")
+                    .append(JsonParser.num(st, "end_line", 0)).append("</td>")
+                    .append("<td><span class=\"tag ").append(esc(tier)).append("\">").append(esc(tier)).append("</span></td>")
+                    .append("<td>").append(esc(cv == null ? "-" : JsonParser.str(cv, "decision"))).append("</td>")
+                    .append("<td>").append(esc(cv == null ? "-" : JsonParser.str(cv, "source"))).append("</td>")
+                    .append("<td>").append(esc(rv == null ? "-" : JsonParser.str(rv, "verdict"))).append("</td>")
+                    .append("<td>").append(esc(ap == null ? "-" : JsonParser.str(ap, "action"))).append("</td></tr>\n");
+        }
+        sb.append("</table>\n");
+
+        sb.append("<h2>逐语句对照</h2>\n");
+        for (Map<String, Object> st : ordered) {
+            String id = JsonParser.str(st, "statement_id");
+            Map<String, Object> an = ctx.analysis.get(id);
+            Map<String, Object> cv = ctx.conversion.get(id);
+            Map<String, Object> rv = ctx.review.get(id);
+            Map<String, Object> ap = ctx.approvals.get(id);
+            Map<String, Object> fx = ctx.fix.get(id);
+            String tier = an == null ? "-" : JsonParser.str(an, "tier");
+            String decision = cv == null ? "-" : JsonParser.str(cv, "decision");
+
+            sb.append("<div class=\"card\" id=\"").append(esc(id)).append("\">\n");
+            sb.append("<h3>").append(esc(id)).append(" ")
+                    .append(esc(orEmpty(JsonParser.str(st, "kind"), "-")))
+                    .append(" <span class=\"tag ").append(esc(tier)).append("\">").append(esc(tier)).append("</span>")
+                    .append("<span class=\"tag ").append(esc(decision)).append("\">").append(esc(decision)).append("</span>")
+                    .append("</h3>\n");
+
+            sb.append("<div class=\"grid\">\n");
+            sb.append("<div><h4>源语句（第 ").append(JsonParser.num(st, "start_line", 0))
+                    .append("-").append(JsonParser.num(st, "end_line", 0)).append(" 行）</h4><pre>")
+                    .append(esc(JsonParser.str(st, "sql"))).append("</pre></div>\n");
+            String after;
+            if (ap != null && "use-manual".equals(JsonParser.str(ap, "action"))) {
+                after = JsonParser.str(ap, "manual_sql");
+            } else if (ap != null && "exclude".equals(JsonParser.str(ap, "action"))) {
+                after = "（人工确认排除该语句）";
+            } else {
+                after = cv == null ? "（无转换记录）" : JsonParser.str(cv, "sql_after");
+            }
+            sb.append("<div><h4>转换结果</h4><pre>")
+                    .append(esc(after == null || after.isBlank() ? "（无可执行结果）" : after))
+                    .append("</pre></div>\n</div>\n");
+
+            sb.append("<dl>\n");
+            if (an != null) {
+                sb.append("<dt>判定依据</dt><dd>").append(esc(oneLine(JsonParser.str(an, "reason")))).append("</dd>\n");
+            }
+            if (cv != null) {
+                sb.append("<dt>识别结果</dt><dd>").append(esc(oneLine(JsonParser.str(cv, "understanding")))).append("</dd>\n");
+                sb.append("<dt>采用策略</dt><dd>").append(esc(oneLine(JsonParser.str(cv, "strategy")))).append("</dd>\n");
+                List<Object> alts = JsonParser.list(cv, "alternatives");
+                if (!alts.isEmpty()) {
+                    StringBuilder alt = new StringBuilder("<ul style=\"margin:0;padding-left:18px\">");
+                    for (Object o : alts) {
+                        Map<String, Object> a = JsonParser.map(o);
+                        alt.append("<li>").append(esc(oneLine(JsonParser.str(a, "option"))))
+                                .append(" —— 放弃原因: ")
+                                .append(esc(oneLine(JsonParser.str(a, "rejected_because")))).append("</li>");
+                    }
+                    sb.append("<dt>备选方案</dt><dd>").append(alt).append("</ul></dd>\n");
+                }
+                List<String> risks = JsonParser.strList(cv, "risks");
+                sb.append("<dt>风险自评</dt><dd>")
+                        .append(risks.isEmpty() ? "无" : esc(String.join("；", risks))).append("</dd>\n");
+                sb.append("<dt>应用规则</dt><dd>")
+                        .append(esc(JsonParser.strList(cv, "rules_used").isEmpty()
+                                ? "（无，模型自由发挥）"
+                                : String.join(", ", JsonParser.strList(cv, "rules_used"))))
+                        .append("</dd>\n");
+                sb.append("<dt>置信度</dt><dd>").append(esc(JsonParser.str(cv, "confidence")))
+                        .append("（来源 ").append(esc(JsonParser.str(cv, "source"))).append("）</dd>\n");
+            }
+            if (rv != null && !JsonParser.list(rv, "findings").isEmpty()) {
+                StringBuilder f = new StringBuilder("<ul style=\"margin:0;padding-left:18px\">");
+                for (Object o : JsonParser.list(rv, "findings")) {
+                    Map<String, Object> one = JsonParser.map(o);
+                    f.append("<li>[").append(esc(JsonParser.str(one, "severity"))).append("] ")
+                            .append(esc(JsonParser.str(one, "id"))).append(": ")
+                            .append(esc(oneLine(JsonParser.str(one, "message")))).append(" → ")
+                            .append(esc(oneLine(JsonParser.str(one, "suggestion")))).append("</li>");
+                }
+                sb.append("<dt>审核发现</dt><dd>").append(f).append("</ul></dd>\n");
+            }
+            if (fx != null) {
+                sb.append("<dt>纠错</dt><dd>第 ").append(JsonParser.num(fx, "round", 0))
+                        .append(" 轮: ").append(esc(oneLine(JsonParser.str(fx, "change")))).append("</dd>\n");
+            }
+            if (ap != null) {
+                sb.append("<dt>人工确认</dt><dd>").append(esc(JsonParser.str(ap, "action")))
+                        .append(" 由 ").append(esc(JsonParser.str(ap, "by")))
+                        .append(" 于 ").append(esc(JsonParser.str(ap, "at")))
+                        .append(" 确认");
+                String note = JsonParser.str(ap, "note");
+                if (note != null && !note.isBlank()) {
+                    sb.append("：").append(esc(note));
+                }
+                sb.append("</dd>\n");
+            }
+            sb.append("</dl>\n</div>\n");
+        }
+
+        sb.append("</body></html>\n");
+        Files.writeString(ctx.run.path(Run.HTML_REPORT), sb.toString(), StandardCharsets.UTF_8);
+    }
+
+    private static String esc(String s) {
+        if (s == null) {
+            return "";
+        }
+        return s.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;");
     }
 
     // ---- 05_final.sql ----

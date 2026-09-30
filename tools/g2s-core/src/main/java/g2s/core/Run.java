@@ -22,6 +22,7 @@ public final class Run {
     public static final String FINAL_SQL = "05_final.sql";
     public static final String PROCESS_LOG = "06_process-log.md";
     public static final String AUDIT_REPORT = "07_audit-report.md";
+    public static final String HTML_REPORT = "08_report.html";
     public static final String MANIFEST = "run_manifest.json";
     public static final String TRACE = "trace.jsonl";
 

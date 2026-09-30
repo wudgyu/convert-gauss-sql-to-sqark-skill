@@ -102,6 +102,14 @@ contains "$RUN/run_manifest.json" '"passed":true' "运行清单记录闸门通�
 contains "$RUN/run_manifest.json" '"verification_tier":"static-only"' "运行清单记录校验档位"
 contains "$RUN/run_manifest.json" '"spark_target"' "运行清单记录目标版本"
 
+if [ -f "$RUN/08_report.html" ]; then
+    ok "生成了对照报告"
+else
+    bad "缺少 08_report.html"
+fi
+contains "$RUN/08_report.html" "ORDER BY order_id NULLS LAST" "对照报告含转换结果"
+contains "$RUN/08_report.html" "未经真实数据执行验证" "对照报告声明校验档位"
+
 echo
 echo "[3] 负例：契约缺陷必须被拦下"
 RUN2="$WORK/run2"

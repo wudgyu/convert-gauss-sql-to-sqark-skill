@@ -171,6 +171,7 @@ public final class Main {
         System.out.println("  " + runDir.resolve(Run.PROCESS_LOG));
         System.out.println("  " + runDir.resolve(Run.AUDIT_REPORT));
         System.out.println("  " + runDir.resolve(Run.MANIFEST));
+        System.out.println("  " + runDir.resolve(Run.HTML_REPORT));
         return gate.passed ? 0 : 3;
     }
 
