@@ -1,0 +1,19 @@
+# 运行产物：每次转换的中间产物、过程文档与 trace
+runs/*
+!runs/.gitkeep
+
+# 工具构建产物：jar 不入库，由构建脚本生成
+tools/bin/*
+!tools/bin/.gitkeep
+tools/**/build/
+*.class
+
+# 原始语料：未脱敏样例放这里，禁止入库
+tests/local/*
+!tests/local/.gitkeep
+
+# 编辑器与系统文件
+.idea/
+*.iml
+.vscode/
+.DS_Store
