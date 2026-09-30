@@ -1,0 +1,203 @@
+# 类型名映射：openGauss/PostgreSQL → Spark 4.2.0
+#
+# 事实依据：checklist/spark-4.2.0-baseline.md 第七节（全部为实测结果）
+#
+# 三个语法位置共用本表：`::` 转换的右侧、`CAST(x AS type)`、DDL 列定义。
+# 特别注意：openGauss 的类型名在 Spark 里几乎全部不被接受，且会在解析期报
+# [UNSUPPORTED_DATATYPE] —— 这类错误一定能被引擎拦下，不会静默通过。
+
+spark_target: "4.2.0"
+
+rules:
+  - id: core.type-map.scalar
+    title: 标量类型名映射
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    # 规则级 tier 为默认值，entries 内的 tier 可逐项覆盖
+    tier: auto
+    confidence: deterministic
+    risk: low
+    priority: 100
+    scope:
+      spark: ["4.2.0"]
+      positions:
+        - ":: 转换的右侧"
+        - "CAST(x AS type)"
+        - "DDL 列定义"
+    when: |
+      出现下列任一 openGauss/PostgreSQL 类型名时，替换为对应的 Spark 类型名。
+      替换必须发生在三个语法位置上，且必须逐条比对，不得凭印象改写。
+    action: |
+      按 entries 表逐项替换类型名。保留原精度与长度参数（如 VARCHAR(48) 保持 (48)）。
+      标识符大小写不敏感，但替换后的 Spark 类型名统一使用大写。
+    entries:
+      - {gauss: ["smallint", "int2"], spark: "SMALLINT", tier: auto}
+      - {gauss: ["integer", "int", "int4"], spark: "INT", tier: auto}
+      - {gauss: ["bigint", "int8"], spark: "BIGINT", tier: auto}
+      - {gauss: ["real", "float4"], spark: "FLOAT", tier: auto}
+      - {gauss: ["double precision", "float8"], spark: "DOUBLE", tier: auto}
+      - {gauss: ["boolean", "bool"], spark: "BOOLEAN", tier: auto}
+      - {gauss: ["date"], spark: "DATE", tier: auto}
+      - {gauss: ["timestamp", "timestamp without time zone"], spark: "TIMESTAMP", tier: auto}
+      - {gauss: ["varchar(n)", "character varying(n)"], spark: "VARCHAR(n)", tier: auto}
+      - {gauss: ["char(n)", "character(n)", "bpchar(n)"], spark: "CHAR(n)", tier: auto}
+      - {gauss: ["text"], spark: "STRING", tier: auto}
+      - {gauss: ["bytea"], spark: "BINARY", tier: auto}
+      - {gauss: ["uuid"], spark: "STRING", tier: auto}
+      - {gauss: ["json", "jsonb"], spark: "STRING", tier: auto}
+      - {gauss: ["xml"], spark: "STRING", tier: auto}
+      - {gauss: ["inet", "cidr", "macaddr"], spark: "STRING", tier: auto}
+      - {gauss: ["oid"], spark: "BIGINT", tier: auto}
+      - {gauss: ["numeric(p,s)", "decimal(p,s)"], spark: "DECIMAL(p,s)", tier: auto}
+      - {gauss: ["varchar"], spark: "STRING", tier: auto,
+         note: "无长度的 varchar 在 openGauss 表示不限长；Spark 不接受无长度的 VARCHAR，映射为 STRING 以保数据完整"}
+    examples:
+      - {input: "a::int4", output: "CAST(a AS INT)", note: "int4 → INT"}
+      - {input: "customer_id BIGINT", output: "customer_id BIGINT", note: "自身即是 Spark 类型，无需改动"}
+      - {input: "sku VARCHAR(48)", output: "sku VARCHAR(48)", note: "长度参数必须保留"}
+      - {input: "note TEXT", output: "note STRING", note: "text 在 Spark 不是合法类型名"}
+      - {input: "payload BYTEA", output: "payload BINARY"}
+      - {input: "props JSONB", output: "props STRING", note: "不映射为 VARIANT，避免绑定落点存储形态"}
+    evidence: "实测：BYTEA/UUID/JSONB/TIMESTAMPTZ/MONEY/TEXT/INT4/FLOAT4/BPCHAR 全部触发 [UNSUPPORTED_DATATYPE]；VARCHAR(10)/CHAR(5) 原样可用"
+
+  - id: core.type-map.numeric-precision
+    title: 无精度 numeric/decimal 必须补精度
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    confidence: deterministic
+    risk: high
+    tier: confirm
+    priority: 200
+    scope:
+      spark: ["4.2.0"]
+      positions:
+        - ":: 转换的右侧"
+        - "CAST(x AS type)"
+        - "DDL 列定义"
+    when: |
+      出现不带精度的 numeric 或 decimal（没有 (p,s) 参数）。
+    action: |
+      这是唯一一处"既不报错又丢数据"的类型映射，必须改写为显式精度并进入人工确认。
+      推荐改写为 DECIMAL(38,18)（Spark 最大精度 38）；若业务明确知道取值范围，
+      由人工指定更合适的精度。
+      **绝对禁止**保留无精度的 numeric/decimal 原样输出。
+    examples:
+      - input: "amount NUMERIC"
+        output: "amount DECIMAL(38,18)"
+        note: "必须经人工确认精度后才定稿"
+      - input: "x::numeric"
+        output: "CAST(x AS DECIMAL(38,18))"
+    evidence: "实测：DECIMAL 与 NUMERIC 无精度时均被解析为 decimal(10,0)，即只保留 10 位整数部分，且不报任何错"
+    notes: |
+      openGauss 的 numeric 是任意精度，Spark 上限为 38 位。超长数值仍需人工评估。
+
+  - id: core.type-map.timezone
+    title: 带时区时间类型的降级
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    confidence: deterministic
+    risk: high
+    tier: confirm
+    priority: 200
+    scope:
+      spark: ["4.2.0"]
+      positions:
+        - ":: 转换的右侧"
+        - "CAST(x AS type)"
+        - "DDL 列定义"
+    when: |
+      出现 timestamptz、timestamp with time zone 或 timestamp(n) with time zone。
+    action: |
+      改写为 TIMESTAMP，但必须进入人工确认：Spark 的 TIMESTAMP 语义上不等价于
+      openGauss 的带时区时间，时区信息与会话时区相关的行为都会变化。
+      同时需要在报告中标注该列涉及时区语义。
+    examples:
+      - {input: "created_at TIMESTAMPTZ", output: "created_at TIMESTAMP", note: "需人工确认时区处理"}
+      - {input: "ts::timestamptz", output: "CAST(ts AS TIMESTAMP)"}
+    evidence: "实测：TIMESTAMPTZ 触发 [UNSUPPORTED_DATATYPE]；Spark TIMESTAMP 与 WITH TIME ZONE 不是同一语义"
+
+  - id: core.type-map.money
+    title: money 类型的降级
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    confidence: heuristic
+    risk: medium
+    tier: confirm
+    priority: 200
+    scope:
+      spark: ["4.2.0"]
+      positions:
+        - ":: 转换的右侧"
+        - "CAST(x AS type)"
+        - "DDL 列定义"
+    when: |
+      出现 money 类型。
+    action: |
+      money 是 8 字节、依赖区域设置的货币类型，Spark 没有对应类型。
+      建议改写为 DECIMAL(19,2)，但必须人工确认小数位与区域设置假设是否成立。
+    examples:
+      - {input: "price MONEY", output: "price DECIMAL(19,2)", note: "小数位需人工确认"}
+    evidence: "实测：MONEY 触发 [UNSUPPORTED_DATATYPE]"
+
+  - id: core.type-map.array
+    title: 数组类型语法改写
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    confidence: deterministic
+    risk: medium
+    tier: confirm
+    priority: 200
+    scope:
+      spark: ["4.2.0"]
+      positions:
+        - "DDL 列定义"
+        - ":: 转换的右侧"
+        - "CAST(x AS type)"
+    when: |
+      出现 PostgreSQL 数组写法：<类型>[] 或 <类型>[<维度>]。
+    action: |
+      改写为 Spark 的 ARRAY<元素类型> 泛型写法，元素类型递归套用本文件映射表。
+      多维数组需人工确认（Spark 只支持嵌套 ARRAY 表示，且不支持固定长度）。
+    examples:
+      - {input: "tags TEXT[]", output: "tags ARRAY<STRING>"}
+      - {input: "score INT[]", output: "score ARRAY<INT>"}
+    evidence: "实测：INT[] 触发 [PARSE_SYNTAX_ERROR]；ARRAY<INT> 正常解析为 array<int>"
+
+  - id: core.type-map.unsupported
+    title: 无法映射的类型
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: high
+    tier: blocked
+    priority: 300
+    scope:
+      spark: ["4.2.0"]
+    when: |
+      出现下列任一无对应 Spark 类型的类型名。
+    action: |
+      阻断该语句，列入人工改写清单，给出下列建议方向，不得自行发明映射。
+    entries:
+      - {gauss: ["time", "time without time zone", "timetz", "time with time zone"],
+         why: "Spark 4.2 没有 TIME 类型", suggest: "改用 STRING 存储并约定格式，或拆分为秒数/毫秒数；需人工确认"}
+      - {gauss: ["interval"],
+         why: "间隔类型不能作为 Spark 列类型", suggest: "拆成起止时间两列，或存为 STRING；需人工确认"}
+      - {gauss: ["serial", "bigserial", "smallserial", "serial2", "serial4", "serial8"],
+         why: "Spark 没有自增列", suggest: "改为普通整型，自增逻辑上移到写入侧；需人工确认"}
+      - {gauss: ["tsvector", "tsquery"],
+         why: "全文检索类型无对应实现", suggest: "改用 STRING 并在查询侧重写检索逻辑"}
+      - {gauss: ["point", "line", "lseg", "box", "path", "polygon", "circle", "geometry", "geography"],
+         why: "几何类型无对应实现", suggest: "改用 STRING 存 WKT，或引入专门的空间扩展；需人工确认"}
+      - {gauss: ["hstore"],
+         why: "键值类型无对应实现", suggest: "改用 MAP<STRING, STRING>"}
+      - {gauss: ["regclass", "regproc", "regtype", "xid", "cid", "tid"],
+         why: "系统内部类型无对应实现", suggest: "通常不应出现在业务表中，需人工确认是否可直接剔除"}
+      - {gauss: ["自定义复合类型与用户定义类型"],
+         why: "Spark 的 STRUCT 语义与 PG 复合类型不一致", suggest: "展开为多个列，或人工构造 STRUCT 并确认字段顺序"}
+    evidence: "实测：TIME 触发 [UNSUPPORTED_TIME_TYPE]；INTERVAL 列触发 [UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE]"

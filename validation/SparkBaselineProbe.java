@@ -90,6 +90,23 @@ public class SparkBaselineProbe {
         }
     }
 
+    static int typeCounter = 0;
+
+    /**
+     * 类型映射实测：建单列表再 DESCRIBE，读出引擎实际解析成的类型。
+     * 关注点是"无精度声明的类型会不会被默认值截断"。
+     */
+    static void typeCheck(String label, String colDef) {
+        String table = "t_type_" + (++typeCounter);
+        try {
+            spark.sql("CREATE TABLE " + table + " (" + colDef + ")").collect();
+            Row row = spark.sql("DESCRIBE TABLE " + table).first();
+            System.out.println("TYPE_OK   | " + label + "  [" + colDef + "]  ->  " + row.getString(1));
+        } catch (Throwable e) {
+            System.out.println("TYPE_FAIL | " + label + "  [" + colDef + "]  ==>  " + shortMsg(e));
+        }
+    }
+
     public static void main(String[] args) {
         spark = SparkSession.builder()
                 .appName("g2s-baseline-probe")
@@ -154,6 +171,31 @@ public class SparkBaselineProbe {
         value("least(1, NULL)", "least(1, CAST(NULL AS INT))");
         value("concat('a', NULL)", "concat('a', CAST(NULL AS STRING))");
         value("concat_ws('', 'a', NULL)", "concat_ws('', 'a', CAST(NULL AS STRING))");
+
+        System.out.println();
+        System.out.println("=== 6. 类型映射实测（DESCRIBE 解析结果） ===");
+        typeCheck("DECIMAL 无精度", "a DECIMAL");
+        typeCheck("NUMERIC 写法", "a NUMERIC");
+        typeCheck("NUMERIC(10,2)", "a NUMERIC(10,2)");
+        typeCheck("VARCHAR 无长度", "a VARCHAR");
+        typeCheck("VARCHAR(10)", "a VARCHAR(10)");
+        typeCheck("CHAR(5)", "a CHAR(5)");
+        typeCheck("STRING", "a STRING");
+        typeCheck("BINARY", "a BINARY");
+        typeCheck("INT[] 数组写法", "a INT[]");
+        typeCheck("ARRAY<INT>", "a ARRAY<INT>");
+        typeCheck("TIME 类型", "a TIME");
+        typeCheck("INTERVAL 列类型", "a INTERVAL");
+        // 以下为 openGauss/PostgreSQL 类型名，预期被引擎拒绝
+        typeCheck("BYTEA", "a BYTEA");
+        typeCheck("UUID", "a UUID");
+        typeCheck("JSONB", "a JSONB");
+        typeCheck("TIMESTAMPTZ", "a TIMESTAMPTZ");
+        typeCheck("MONEY", "a MONEY");
+        typeCheck("TEXT", "a TEXT");
+        typeCheck("INT4", "a INT4");
+        typeCheck("FLOAT4", "a FLOAT4");
+        typeCheck("BPCHAR", "a BPCHAR");
 
         spark.stop();
     }

@@ -1,0 +1,96 @@
+# 规则库主题索引
+#
+# 本文件是规则库的路由入口。转换节点先识别语句特征，再按本索引只加载相关规则文件，
+# 避免把整个规则库灌进上下文（渐进披露）。
+#
+# ── 规则条目字段说明（各规则文件共用）─────────────────────────────
+#
+#   id          规则唯一标识，格式 <域>.<主题>.<细分>。模型输出必须回标所应用的 id。
+#   title       规则标题
+#   version     规则版本，规则内容变更时递增
+#   status      enabled | disabled | candidate | deprecated
+#               candidate 表示由审核阶段提炼、尚未批准的新规则草稿
+#   kind        rewrite | block | note
+#               rewrite=给出改写方法；block=必须阻断；note=仅提示，不改变语句
+#   tier        auto | confirm | blocked   —— 决定闸门行为，见下方"档位"
+#   confidence  deterministic | heuristic
+#   risk        low | medium | high
+#   scope       适用条件
+#                 statement: 语句类型列表（对应切分器输出的 kind）
+#                 spark:     适用的 Spark 版本
+#   when        触发条件（人话描述给模型判断）
+#   action      改写动作（kind=rewrite 时必填）
+#   examples    input / output / note 三元组
+#   evidence    该规则的事实依据（实测记录、官方行为等）。无依据的规则不得启用。
+#   notes       补充说明与坑
+#
+# ── 档位（决定是否自动放行）────────────────────────────────────
+#
+#   auto     确定性转换、低风险 → 自动通过，不需要人工确认
+#   confirm  可转换，但语义存在偏差或依赖前置条件 → 默认阻断，需人工确认
+#   blocked  无法转换 → 必须人工改写
+#
+#   闸门规则：只有 auto 自动放行；confirm 与 blocked 一律进入审批清单。
+#
+# ── 事实依据 ───────────────────────────────────────────────
+#
+#   Spark 行为一律以 checklist/spark-4.2.0-baseline.md 的实测结论为准。
+#   规则与该文件冲突时，以基线文件为准，并修订规则。
+
+version: "0.1.0"
+spark_target: "4.2.0"
+source_dialect: "openGauss (DBCOMPATIBILITY = PG)"
+
+topics:
+  - file: core/010-type-mapping.yaml
+    title: 类型名映射
+    load_when:
+      - 语句中出现 :: 类型转换
+      - 语句中出现 CAST(x AS type)
+      - 语句类型为 CREATE_TABLE / CREATE_TABLE_AS / ALTER_TABLE
+      - 语句中出现数组、间隔、时间类型
+
+  - file: core/020-ordering-null.yaml
+    title: 排序与 NULL 位置
+    status: planned
+    load_when:
+      - 语句中出现 ORDER BY
+      - 语句中出现窗口函数的 OVER (... ORDER BY ...)
+    priority_note: 头号语义漂移项，Spark 与 openGauss 的默认 NULL 位置完全相反
+
+  - file: core/030-null-semantics.yaml
+    title: NULL 语义差异函数
+    status: planned
+    load_when:
+      - 语句中出现 concat / greatest / least / coalesce / nullif
+
+  - file: core/040-scalar-functions.yaml
+    title: 标量函数映射
+    status: planned
+    load_when:
+      - 语句中出现函数调用
+
+  - file: core/050-datetime-format.yaml
+    title: 日期时间与格式化
+    status: planned
+    load_when:
+      - 语句中出现 to_char / to_date / to_timestamp / to_number
+      - 语句中出现 date_trunc / date_part / extract
+      - 语句中出现 sysdate / current_date / now
+
+  - file: core/060-ddl.yaml
+    title: DDL 对象与表属性
+    status: planned
+    load_when:
+      - 语句类型以 CREATE_ / ALTER_ / DROP_ / COMMENT 开头
+      - 语句中出现 DISTRIBUTE BY / WITH (ORIENTATION=...) / TABLESPACE
+
+  - file: unsupported.yaml
+    title: 语句级不支持清单（权威）
+    load_when:
+      - 总是加载。判定 blocked 之前必须先比对本清单
+
+checklist:
+  - file: ../checklist/semantic-drift-checklist.md
+    title: 静默语义漂移检查清单
+    used_by: gauss2spark-review

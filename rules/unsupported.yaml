@@ -1,0 +1,239 @@
+# 语句级不支持清单（权威）
+#
+# 判定 blocked 之前必须先比对本清单。清单中未列出的构造，不得凭印象判定为不支持；
+# 清单中已列出的，也不得因为"看起来能转换"而放行。
+#
+# 事实依据：checklist/spark-4.2.0-baseline.md
+# 类型层面的阻断见 core/010-type-mapping.yaml，本文件不重复。
+
+version: "1.0.0"
+spark_target: "4.2.0"
+
+rules:
+  - id: block.pl-block
+    title: PL 块与存储过程
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: high
+    tier: blocked
+    scope:
+      statement: [DO, CALL, CREATE_FUNCTION, CREATE_PROCEDURE, CREATE_TRIGGER,
+                  ALTER_FUNCTION, ALTER_PROCEDURE, DROP_FUNCTION, DROP_PROCEDURE]
+    when: |
+      切分器标记 is_pl_block=true，或语句类型为上列之一，或语句含 LANGUAGE plpgsql。
+    action: |
+      整体阻断，不得拆开转换。建议处置：把过程逻辑上移到调度/应用层，
+      或改写为一批可独立执行的 Spark SQL 语句；必须人工确认。
+    evidence: "本轮范围明确不支持 PL 块；Spark 4.2 虽有 SQL scripting，但不在本次目标语法范围内"
+    notes: |
+      CREATE OR REPLACE PROCEDURE 属于这一类。切分器早期版本曾漏判，
+      已修正为按"DDL 动词 + 跳过 OR REPLACE 修饰后的对象词"识别。
+
+  - id: block.sequence
+    title: 序列与自增取值
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: high
+    tier: blocked
+    scope:
+      statement: [CREATE_SEQUENCE, ALTER_SEQUENCE, DROP_SEQUENCE, SELECT, INSERT, UPDATE]
+    when: |
+      语句类型为序列相关 DDL，或语句中出现 nextval( / currval( / setval( 。
+    action: |
+      阻断。Spark 没有序列对象。建议改为写入侧生成键值，或使用单调递增函数
+      （如 monotonically_increasing_id，注意其不保证连续），必须人工确认。
+    evidence: "实测：CREATE SEQUENCE 触发 [PARSE_SYNTAX_ERROR]"
+
+  - id: block.copy
+    title: COPY 导入导出
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: high
+    tier: blocked
+    scope:
+      statement: [COPY]
+    when: "语句类型为 COPY。"
+    action: |
+      阻断。建议改用 Spark 的读写 API 或 COPY INTO（后者语义不同，需人工确认）。
+    evidence: "实测：COPY t FROM '...' 触发 [PARSE_SYNTAX_ERROR]"
+
+  - id: block.meta-command
+    title: psql 元命令
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: medium
+    tier: blocked
+    scope:
+      statement: [META]
+    when: "切分器标记 is_meta_command=true（行首反斜杠命令）。"
+    action: |
+      阻断。元命令由客户端解释，不是 SQL，无法在 Spark 侧等价执行。
+      建议改为对应的 SQL 语句或从脚本中移除，由人工确认。
+    evidence: "psql 元命令不属于 SQL 语法"
+
+  - id: block.index
+    title: CREATE INDEX
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: medium
+    tier: blocked
+    scope:
+      statement: [CREATE_INDEX, DROP_INDEX, ALTER_INDEX]
+    when: "语句类型为索引相关 DDL。"
+    action: |
+      阻断。Spark SQL 表中没有索引概念；查询加速依赖分区、分桶或列式存储特性。
+      需人工确认是否需要改造成分区/分桶策略，或直接剔除。
+    evidence: "Spark SQL 无索引 DDL"
+
+  - id: block.dml-requires-v2
+    title: UPDATE / DELETE / MERGE 依赖表格式
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: high
+    tier: confirm
+    scope:
+      statement: [UPDATE, DELETE, MERGE]
+    when: "语句类型为 UPDATE / DELETE / MERGE。"
+    action: |
+      不是语法问题，而是**取决于目标表格式**：标准 Spark SQL 在普通表上不支持
+      行级修改，只有 Delta / Iceberg / Hudi 等支持事务的表才可执行。
+      必须由人工确认目标表格式后决定：可执行则放行，否则改写为
+      覆盖写（INSERT OVERWRITE）或重建表。
+    evidence: "实测：UPDATE/DELETE/MERGE 语法解析通过，但在普通表与临时视图上均于分析期失败"
+    notes: |
+      理由措辞很重要：报告里不能说"Spark 不支持 UPDATE"，而应说明"取决于目标表格式"，
+      否则人工确认时会得到错误的结论。
+
+  - id: block.materialized-view
+    title: 物化视图
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: medium
+    tier: blocked
+    scope:
+      statement: [CREATE_MATERIALIZED, ALTER_MATERIALIZED, DROP_MATERIALIZED]
+    when: "语句类型为物化视图相关 DDL。"
+    action: |
+      阻断。开源 Spark SQL 没有物化视图对象，需人工确认是否改为定时刷新实体表。
+    evidence: "Spark 4.2 无物化视图 DDL"
+
+  - id: block.privilege
+    title: 权限语句
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: medium
+    tier: blocked
+    scope:
+      statement: [GRANT, REVOKE]
+    when: "语句类型为 GRANT / REVOKE。"
+    action: |
+      阻断。权限体系随平台不同，需由目标平台的权限管理方式承接，人工确认。
+    evidence: "权限模型不通用"
+
+  - id: block.maintenance
+    title: 运维维护语句
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: low
+    tier: blocked
+    scope:
+      statement: [MAINTENANCE, LOCK]
+    when: "语句类型为 VACUUM / ANALYZE / REINDEX / CLUSTER / LOCK。"
+    action: |
+      阻断。这些是存储引擎的运维操作，无 SQL 层等价物，直接从交付脚本中剔除或
+      交由目标平台运维流程处理。
+    evidence: "Spark SQL 无对应语句"
+
+  - id: block.cursor
+    title: 游标
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: medium
+    tier: blocked
+    scope:
+      statement: [CURSOR]
+    when: "语句类型为 DECLARE / FETCH / CLOSE / MOVE。"
+    action: |
+      阻断。游标是过程式结构的产物，通常出现在 PL 块中，需随 PL 逻辑一并人工改写。
+    evidence: "Spark SQL 无游标语法"
+
+  - id: block.transaction
+    title: 事务控制
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: medium
+    tier: blocked
+    scope:
+      statement: [TRANSACTION]
+    when: "语句类型为 BEGIN / START TRANSACTION / COMMIT / ROLLBACK / SAVEPOINT / RELEASE。"
+    action: |
+      阻断。标准 Spark SQL 没有多语句事务；事务边界由写入方（表格式或调度）保证。
+      需人工确认脚本的事务语义如何承接。
+    evidence: "Spark SQL 无 BEGIN/COMMIT 事务语法"
+
+  - id: block.prepared
+    title: 预处理语句
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: low
+    tier: blocked
+    scope:
+      statement: [PREPARED]
+    when: "语句类型为 PREPARE / EXECUTE / DEALLOCATE。"
+    action: |
+      阻断。预处理语句是会话级的，需改由应用层的参数化查询承接，人工确认。
+    evidence: "Spark SQL 无 PREPARE/EXECUTE"
+
+  - id: block.async
+    title: 异步通知
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: low
+    tier: blocked
+    scope:
+      statement: [ASYNC]
+    when: "语句类型为 LISTEN / NOTIFY / UNLISTEN。"
+    action: |
+      阻断。这是数据库内的消息机制，需由外部消息系统承接，人工确认。
+    evidence: "Spark SQL 无 LISTEN/NOTIFY"
+
+  - id: block.extension
+    title: 扩展与表空间
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    confidence: deterministic
+    risk: medium
+    tier: blocked
+    scope:
+      statement: [CREATE_EXTENSION, DROP_EXTENSION, CREATE_TABLESPACE, DROP_TABLESPACE]
+    when: "语句类型为扩展或表空间相关 DDL。"
+    action: |
+      阻断。属于数据库实例级对象，迁移到 Spark 侧需平台层面承接，人工确认。
+    evidence: "实例级对象无 SQL 层等价物"

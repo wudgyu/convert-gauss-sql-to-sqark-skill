@@ -120,3 +120,26 @@ Sort [a#40 ASC NULLS LAST], true, 0       <- ORDER BY a NULLS LAST（显式）
    并说明未覆盖版本的处置方式（不承诺正确性，需自行重跑基线）。
 4. 将来扩展版本支持时，用 `validation/SparkBaselineProbe.java` 在目标版本上重跑，
    新建 `checklist/spark-<version>-baseline.md`，逐条比对差异后再放开。
+
+## 七、类型映射实测（建表后 DESCRIBE 的解析结果）
+
+| 写法 | 结果 | 结论 |
+|---|---|---|
+| `DECIMAL`（无精度） | `decimal(10,0)` | **静默截断**：openGauss 的 `numeric` 是任意精度，照搬会被截成 10 位整数部分 |
+| `NUMERIC`（无精度） | `decimal(10,0)` | 同上，且**不报错**，比报错更危险 |
+| `NUMERIC(10,2)` | `decimal(10,2)` | 正常 |
+| `VARCHAR`（无长度） | `[DATATYPE_MISSING_SIZE]` 报错 | 必须补长度或改为 `STRING` |
+| `VARCHAR(10)` / `CHAR(5)` | `varchar(10)` / `char(5)` | 可原样保留 |
+| `STRING` / `BINARY` | `string` / `binary` | 正常 |
+| `INT[]` 数组写法 | `[PARSE_SYNTAX_ERROR]` | 数组语法必须改写为 `ARRAY<INT>` |
+| `ARRAY<INT>` | `array<int>` | 正常 |
+| `TIME` | `[UNSUPPORTED_TIME_TYPE]` | **Spark 4.2 没有 TIME 类型**，必须阻断或降级为 STRING |
+| `INTERVAL` 列类型 | `[UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE]` | 间隔类型不能作为列类型 |
+| `BYTEA` / `UUID` / `JSONB` / `TIMESTAMPTZ` / `MONEY` / `TEXT` / `INT4` / `FLOAT4` / `BPCHAR` | 全部 `[UNSUPPORTED_DATATYPE]` 解析报错 | openGauss 类型名一律不被接受，**必须逐个映射** |
+
+两点值得单独强调：
+
+1. **`numeric` 不报错但会截断**。这是整个类型映射里唯一一处"既不报错又丢数据"的组合，
+   必须映射为显式精度（推荐 `DECIMAL(38,18)`）并归入 `confirm` 档要求人工确认。
+2. **`text` 在 Spark 里不是合法类型名**。它是最常见的 openGauss 类型之一，
+   漏映射会直接解析失败——好处是这类错误一定会被引擎拦下，不会静默通过。
