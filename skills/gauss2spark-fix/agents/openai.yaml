@@ -1,0 +1,4 @@
+interface:
+  display_name: "SQL 纠错"
+  short_description: "按审核 findings 修复转换结果，最多两轮，并记录每处改动依据"
+  default_prompt: "用 gauss2spark-fix 修复审核发现的问题"

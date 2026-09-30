@@ -1,0 +1,4 @@
+interface:
+  display_name: "SQL 分析"
+  short_description: "切分、分类、风险分级与规则路由，本节点不改写任何 SQL 语句"
+  default_prompt: "用 gauss2spark-analyze 分析这个 openGauss SQL 文件"

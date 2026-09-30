@@ -1,0 +1,4 @@
+interface:
+  display_name: "GaussDB 转 Spark 编排"
+  short_description: "端到端迁移整个 openGauss SQL 文件到 Spark 4.2.0，带审批闸门"
+  default_prompt: "用 gauss2spark 把这个 openGauss SQL 文件转换到 Spark SQL"

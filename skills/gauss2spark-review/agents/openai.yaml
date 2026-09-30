@@ -1,0 +1,4 @@
+interface:
+  display_name: "SQL 审核"
+  short_description: "独立复核转换结果的语义漂移与残留方言，产出 findings"
+  default_prompt: "用 gauss2spark-review 复核这次转换结果"
