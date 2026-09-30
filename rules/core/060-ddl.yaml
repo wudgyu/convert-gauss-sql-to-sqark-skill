@@ -1,0 +1,207 @@
+# DDL 对象与表属性
+#
+# 事实依据：checklist/spark-4.2.0-baseline.md 第十节（实测）
+# 真实语料 tests/local/ddl_objects_large.sql 中出现的高频构造已全部覆盖。
+
+spark_target: "4.2.0"
+
+rules:
+  - id: core.ddl.comment-on-column
+    title: COMMENT ON COLUMN 需改用 ALTER TABLE 写法
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: auto
+    confidence: deterministic
+    risk: low
+    priority: 400
+    scope:
+      statement: [COMMENT]
+      spark: ["4.2.0"]
+    when: "语句形如 COMMENT ON COLUMN 表.列 IS 注释。"
+    action: |
+      改写为 ALTER TABLE 表 ALTER COLUMN 列 COMMENT 注释。
+      Spark 不支持 COMMENT ON COLUMN 语法，必须换写法。
+      列名不要带表名前缀。
+    examples:
+      - input: "COMMENT ON COLUMN retail.order_header.order_status IS 'Lifecycle state'"
+        output: "ALTER TABLE retail.order_header ALTER COLUMN order_status COMMENT 'Lifecycle state'"
+    evidence: |
+      实测：COMMENT ON COLUMN probe_t.a IS 注释 触发 PARSE_SYNTAX_ERROR（报错位置在 COLUMN 处）；
+      而 ALTER TABLE probe_t ALTER COLUMN b COMMENT 注释 执行成功。
+
+  - id: core.ddl.comment-on-table
+    title: COMMENT ON TABLE 原生支持
+    version: "1.0.0"
+    status: enabled
+    kind: note
+    tier: auto
+    confidence: deterministic
+    risk: low
+    scope:
+      statement: [COMMENT]
+      spark: ["4.2.0"]
+    when: "语句形如 COMMENT ON TABLE 表 IS 注释。"
+    action: "原样保留。"
+    examples:
+      - input: "COMMENT ON TABLE retail.order_header IS 'Operational order header'"
+        output: "COMMENT ON TABLE retail.order_header IS 'Operational order header'"
+    evidence: "实测：COMMENT ON TABLE probe_t IS 注释 执行成功"
+
+  - id: core.ddl.default-nextval
+    title: DEFAULT nextval 子句必须去掉
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: confirm
+    confidence: deterministic
+    risk: high
+    priority: 700
+    scope:
+      statement: [CREATE_TABLE, CREATE_TABLE_AS, ALTER_TABLE]
+      spark: ["4.2.0"]
+    when: "列定义中出现 DEFAULT nextval( 或 DEFAULT 序列取值。"
+    action: |
+      删除该 DEFAULT 子句，并在报告中把该列标记为「主键生成方式需变更」。
+      Spark 既没有序列也没有自增列，键值必须由写入侧生成（应用层或 ETL）。
+
+      这是真实语料里最高频的阻断来源：几乎每个建表语句都有这种写法。
+      必须由人工一次性统一确认键值生成策略，不要逐条猜测。
+    examples:
+      - input: "order_id BIGINT NOT NULL DEFAULT nextval('retail.order_id_seq')"
+        output: "order_id BIGINT NOT NULL"
+        note: "去掉默认值，键值生成上移到写入侧"
+    evidence: |
+      实测：CREATE TABLE t_def (a BIGINT DEFAULT nextval('s')) 触发
+      UNRESOLVED_ROUTINE: Cannot resolve routine nextval。
+      真实语料 tests/local/ddl_objects_large.sql 中该写法出现在多个建表语句。
+
+  - id: core.ddl.storage-clause
+    title: openGauss 存储子句必须移除
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: confirm
+    confidence: deterministic
+    risk: medium
+    priority: 700
+    scope:
+      statement: [CREATE_TABLE, ALTER_TABLE]
+      spark: ["4.2.0"]
+    when: "语句中出现 WITH (ORIENTATION=...)、WITH (COMPRESSION=...)、TABLESPACE 等实例级存储子句。"
+    action: |
+      移除这些子句，并在报告中标注「存储属性未迁移」。
+      存储格式与压缩属于落点平台职责；本次决策明确不绑定落点存储形态，
+      因此不能自行改写为 Spark 的 USING 或 TBLPROPERTIES，需人工确认。
+    examples:
+      - input: "CREATE TABLE t (a INT) WITH (ORIENTATION=COLUMN)"
+        output: "CREATE TABLE t (a INT)"
+        note: "移除存储子句，落点属性待人工确认"
+    evidence: |
+      实测：无论值是否加引号，WITH (ORIENTATION=...) 均触发 PARSE_SYNTAX_ERROR，
+      属于必须移除的构造，不会静默通过。
+
+  - id: core.ddl.distribute-by
+    title: DISTRIBUTE BY 必须移除（词同意不同）
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: confirm
+    confidence: deterministic
+    risk: high
+    priority: 800
+    scope:
+      statement: [CREATE_TABLE, CREATE_TABLE_AS, SELECT, INSERT]
+      spark: ["4.2.0"]
+    when: "语句中出现 DISTRIBUTE BY，含 HASH、REPLICATION、ROUNDROBIN 变体。"
+    action: |
+      一律移除，不得原样保留。这是全库最危险的「词同意不同」构造：
+
+        - 在建表语句中：openGauss 用它定义分布键，是数据布局的一部分。
+        - 在查询语句中：Spark 里同名关键字能解析成功，但含义是重分区，
+          不是分布键定义；原样保留会完全改变执行语义而且不报错。
+
+      移除后必须人工确认是否需要改用分区或分桶策略来承接。
+    examples:
+      - input: "CREATE TABLE t (a INT) DISTRIBUTE BY HASH(a)"
+        output: "CREATE TABLE t (a INT)"
+        note: "移除并标注分布策略待确认"
+      - input: "SELECT a FROM t DISTRIBUTE BY a"
+        output: "SELECT a FROM t"
+        note: "解析能通过但语义完全不同，必须移除"
+    evidence: |
+      实测：CREATE TABLE ... DISTRIBUTE BY HASH(a) 触发 PARSE_SYNTAX_ERROR；
+      而 SELECT a FROM t DISTRIBUTE BY a 解析成功（Spark 视为重分区提示）。
+      同一种写法在两种上下文里失败方式不同，是本条最需要注意的地方。
+
+  - id: core.ddl.partition-by
+    title: openGauss 分区定义需人工改写
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: confirm
+    confidence: deterministic
+    risk: medium
+    priority: 700
+    scope:
+      statement: [CREATE_TABLE, ALTER_TABLE]
+      spark: ["4.2.0"]
+    when: "语句中出现 PARTITION BY RANGE、LIST、HASH，或 SUBPARTITION。"
+    action: |
+      阻断并人工改写。Spark 的 PARTITIONED BY 只支持按列分区，
+      不区分 range/list/hash，也没有子分区概念；分区键选择直接影响性能与落点结构，
+      必须由人工决定是保留分区、改为分桶，还是完全去掉。
+    examples:
+      - input: "CREATE TABLE t (a INT) PARTITION BY RANGE (a)"
+        output: "阻断：分区策略需人工确认"
+    evidence: "实测：CREATE TABLE ... PARTITION BY RANGE (a) 触发 PARSE_SYNTAX_ERROR"
+
+  - id: core.ddl.native-forms
+    title: 原生可用的 DDL 写法
+    version: "1.0.0"
+    status: enabled
+    kind: note
+    tier: auto
+    confidence: deterministic
+    risk: low
+    scope:
+      statement: [CREATE_TABLE, CREATE_VIEW, ALTER_TABLE, TRUNCATE]
+      spark: ["4.2.0"]
+    when: "出现下列写法。"
+    action: "原样保留，无需改写。"
+    entries:
+      - CREATE TABLE 带列定义
+      - CREATE TABLE AS SELECT
+      - CREATE TABLE LIKE 源表
+      - CREATE VIEW 与 CREATE OR REPLACE VIEW
+      - ALTER TABLE ADD COLUMN，单数写法同样可用
+      - ALTER TABLE ALTER COLUMN TYPE
+      - TRUNCATE TABLE
+      - INSERT INTO SELECT
+    evidence: |
+      实测均执行成功：CREATE VIEW、CREATE OR REPLACE VIEW、CREATE TABLE AS SELECT、
+      CREATE TABLE LIKE、ALTER TABLE ADD COLUMN、ALTER TABLE ADD COLUMNS、
+      ALTER TABLE ALTER COLUMN TYPE、TRUNCATE TABLE。
+
+  - id: core.ddl.temp-table
+    title: 临时表语义需确认
+    version: "0.1.0"
+    status: candidate
+    kind: rewrite
+    tier: confirm
+    confidence: heuristic
+    risk: medium
+    priority: 700
+    scope:
+      statement: [CREATE_TABLE]
+      spark: ["4.2.0"]
+    when: "语句中出现 CREATE TEMP TABLE 或 CREATE TEMPORARY TABLE。"
+    action: |
+      暂定阻断，人工确认。Spark 的临时对象（CREATE TEMPORARY VIEW）是会话级视图，
+      生命周期与数据落地方式都与 openGauss 的临时表不同，不能直接等价替换。
+    examples:
+      - input: "CREATE TEMP TABLE staging_tmp (a INT)"
+        output: "阻断：需确认改为临时视图还是普通表"
+    notes: |
+      本规则状态为 candidate：尚未在 Spark 4.2.0 上实测 CREATE TEMPORARY TABLE
+      的实际行为与限制，因此不得启用。补充实测证据后再改为 enabled。

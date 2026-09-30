@@ -1,0 +1,125 @@
+# 日期时间函数与格式化
+#
+# 事实依据：checklist/spark-4.2.0-baseline.md 第九节（实测）
+#
+# 本文件是「静默出错」最集中的地方：格式串 token 大小写写错时，
+# 有的会报错拦下，有的会安静地给出错误结果。
+
+spark_target: "4.2.0"
+
+rules:
+  - id: core.datetime.format-tokens
+    title: 日期格式串 token 翻译表
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: auto
+    confidence: deterministic
+    # 规则本身是确定性的、可逐项核对；风险在"漏改的后果"，已在说明中标注
+    risk: medium
+    priority: 600
+    scope:
+      spark: ["4.2.0"]
+      positions:
+        - "to_char 的第二个参数"
+        - "to_date / to_timestamp 的第二个参数"
+        - "date_format 的第二个参数"
+    when: "出现日期格式串（形如 YYYY-MM-DD HH24:MI:SS）。"
+    action: |
+      把 openGauss/Oracle 的格式 token 逐个翻译成 Spark（Java）的 token，
+      大小写必须严格照表：
+
+        YYYY  -> yyyy      YY -> yy
+        MM    -> MM        MON -> MMM     MONTH -> MMMM
+        DD    -> dd        DY -> EEE      DAY -> EEEE
+        HH24  -> HH        24 小时制
+        HH12  -> hh
+        HH    -> hh        源端 HH 是 12 小时制，翻译后必须是小写 hh
+        MI    -> mm        必须小写，大写 MM 在 Java 里是月份
+        SS    -> ss        必须小写
+        MS    -> SSS
+        AM/PM -> a
+        FM    -> 删除（Spark 无填充修饰符等价物，对齐行为需人工确认）
+        TZ / OF -> 需人工确认
+
+      两个必须记住的坑：
+        1. HH24 与 HH 的翻译方向相反：源端 HH 是 12 小时制、要变成小写 hh；
+           源端 HH24 才对应大写 HH。
+        2. SS 必须改成小写 ss。写成大写 SS 时 Spark 不报错，
+           而是把它当成秒的小数部分，静默给出错误时间。
+    examples:
+      - input: "to_char(created_at, 'YYYY-MM-DD')"
+        output: "date_format(created_at, 'yyyy-MM-dd')"
+      - input: "to_char(created_at, 'YYYY-MM-DD HH24:MI:SS')"
+        output: "date_format(created_at, 'yyyy-MM-dd HH:mm:ss')"
+      - input: "格式串 'yyyy-MM-dd HH:mm:SS'（SS 未转小写）"
+        output: "格式串 'yyyy-MM-dd HH:mm:ss'"
+        note: "实测未转小写时输出 13:05:00，静默吞掉秒值"
+    evidence: |
+      实测（对时间戳 2026-01-01 13:05:07）：
+        date_format(ts, 'yyyy-MM-dd HH:mm:ss')  = 2026-01-01 13:05:07  正确
+        date_format(ts, 'yyyy-MM-dd HH:mm:SS')  = 2026-01-01 13:05:00  静默错误
+        date_format(ts, 'yyyy-MM-dd HH24:MI:SS') 报 INVALID_DATETIME_PATTERN
+        date_format(ts, 'yyyy-MM-dd HH:MI')      报 INVALID_DATETIME_PATTERN
+        date_format(date, 'YYYY-MM-DD')          报 INCONSISTENT_BEHAVIOR_CROSS_VERSION
+
+  - id: core.datetime.to-char
+    title: to_char 改为 date_format
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: auto
+    confidence: deterministic
+    risk: medium
+    priority: 500
+    scope:
+      spark: ["4.2.0"]
+    when: "语句中出现 to_char(。"
+    action: |
+      改写为 date_format(值, 翻译后的格式串)。格式串翻译必须套用
+      core.datetime.format-tokens，不得原样保留。
+      若该 to_char 用于数字格式化（金额、编号、补齐位数），Spark 无等价实现，
+      必须阻断并人工确认，不得强行改写。
+    examples:
+      - {input: "to_char(order_day, 'YYYY-MM-DD')", output: "date_format(order_day, 'yyyy-MM-dd')"}
+      - {input: "to_char(order_total, 'FM999999.00')", output: "阻断：数字格式化无等价实现"}
+    evidence: "实测：to_char(current_date,'YYYY-MM-DD') 分析期报错；date_format 等价写法通过且取值正确"
+
+  - id: core.datetime.to-date-timestamp
+    title: to_date 与 to_timestamp 的格式串翻译
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: auto
+    confidence: deterministic
+    risk: medium
+    priority: 500
+    scope:
+      spark: ["4.2.0"]
+    when: "语句中出现 to_date( 或 to_timestamp(，且带格式串参数。"
+    action: |
+      函数名保持不变，只需把格式串按 core.datetime.format-tokens 翻译。
+      注意区分两种形态：带格式串的 to_date(str, fmt) 需要翻译格式串；
+      不带格式串的 to_date(str) 与 Spark 语义一致，无需改动。
+    examples:
+      - {input: "to_date(order_day, 'YYYY-MM-DD')", output: "to_date(order_day, 'yyyy-MM-dd')"}
+      - {input: "to_date(order_day)", output: "to_date(order_day)", note: "无格式串，保持不变"}
+      - input: "to_timestamp(created_at, 'YYYY-MM-DD HH24:MI:SS')"
+        output: "to_timestamp(created_at, 'yyyy-MM-dd HH:mm:ss')"
+    evidence: "实测：to_date('2026-01-01','YYYY-MM-DD') 报错；to_date('2026-01-01','yyyy-MM-dd') 返回 2026-01-01"
+
+  - id: core.datetime.date-trunc-case
+    title: date_trunc 单位大小写无需转换
+    version: "1.0.0"
+    status: enabled
+    kind: note
+    tier: auto
+    confidence: deterministic
+    risk: low
+    scope:
+      spark: ["4.2.0"]
+    when: "语句中出现 date_trunc(。"
+    action: "原样保留。单位大小写（month 与 MONTH）都可正常使用，不要做无谓改写。"
+    examples:
+      - {input: "date_trunc('month', created_at)", output: "date_trunc('month', created_at)"}
+    evidence: "实测：date_trunc('month', ...) 与 date_trunc('MONTH', ...) 均通过"

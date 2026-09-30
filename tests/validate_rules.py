@@ -15,6 +15,37 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RULES_DIR = REPO_ROOT / "rules"
 
+
+class StrictLoader(yaml.SafeLoader):
+    """拒绝重复键的加载器。
+
+    YAML 默认允许重复键且后者覆盖前者，这会让规则里出现两个 tier 时静默生效一个，
+    正是本规则库最需要避免的歧义，因此必须当成错误处理。
+    """
+
+
+def _construct_mapping_no_duplicates(loader, node):
+    loader.flatten_mapping(node)
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=True)
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                None, None, f"重复的键: {key}", key_node.start_mark
+            )
+        mapping[key] = loader.construct_object(value_node, deep=True)
+    return mapping
+
+
+StrictLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping_no_duplicates
+)
+
+
+def load_yaml(path):
+    return yaml.load(path.read_text(encoding="utf-8"), Loader=StrictLoader)
+
+
 KINDS = {"rewrite", "block", "note"}
 TIERS = {"auto", "confirm", "blocked"}
 STATUSES = {"enabled", "disabled", "candidate", "deprecated"}
@@ -87,9 +118,10 @@ def check_rule(rule, source):
             if not isinstance(ex, dict) or "input" not in ex or "output" not in ex:
                 err(f"{source}: {rid} 第 {i + 1} 个 example 缺少 input/output")
 
-    # 高风险规则必须进 confirm 或 blocked，不允许 auto 自动放行
-    if risk == "high" and tier == "auto":
-        err(f"{source}: {rid} risk=high 却 tier=auto，高风险规则不得自动放行")
+    # 高风险的"改写类"规则必须进 confirm 或 blocked，不允许自动放行。
+    # note 类规则不改变语句，不受此限制。
+    if risk == "high" and tier == "auto" and kind == "rewrite":
+        err(f"{source}: {rid} risk=high 却 tier=auto，高风险改写规则不得自动放行")
 
 
 def main():
@@ -99,7 +131,7 @@ def main():
         return report()
 
     try:
-        index = yaml.safe_load(index_path.read_text(encoding="utf-8"))
+        index = load_yaml(index_path)
     except yaml.YAMLError as e:
         err(f"rules/index.yaml 解析失败: {e}")
         return report()
@@ -124,7 +156,7 @@ def main():
             continue
         rel = path.relative_to(REPO_ROOT)
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            data = load_yaml(path)
         except yaml.YAMLError as e:
             err(f"{rel}: YAML 解析失败: {e}")
             continue

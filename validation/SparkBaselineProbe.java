@@ -90,7 +90,35 @@ public class SparkBaselineProbe {
         }
     }
 
+    /** 聚合语义确认：带 FROM nums 求值。 */
+    static void agg(String label, String expr) {
+        try {
+            Row row = spark.sql("SELECT " + expr + " AS v FROM nums").first();
+            System.out.println("AGG_OK   | " + label + " = " + String.valueOf(row.get(0)));
+        } catch (Throwable e) {
+            System.out.println("AGG_FAIL | " + label + "  ==>  " + shortMsg(e));
+        }
+    }
+
     static int typeCounter = 0;
+
+    /**
+     * 函数可用性检查：对表达式跑 EXPLAIN，判定 Spark 是否接受（含分析期）。
+     * 用于确定哪些 openGauss 函数需要映射、哪些可以原样保留。
+     */
+    static void funcCheck(String label, String expr) {
+        String sql = "SELECT " + expr + " FROM nums";
+        try {
+            String plan = spark.sql("EXPLAIN " + sql).first().getString(0);
+            if (plan.contains("Error occurred during query planning")) {
+                System.out.println("FUNC_ANALYSIS_ERROR | " + label);
+            } else {
+                System.out.println("FUNC_OK             | " + label);
+            }
+        } catch (Throwable e) {
+            System.out.println("FUNC_REJECTED       | " + label + "  ==>  " + shortMsg(e));
+        }
+    }
 
     /**
      * 类型映射实测：建单列表再 DESCRIBE，读出引擎实际解析成的类型。
@@ -196,6 +224,104 @@ public class SparkBaselineProbe {
         typeCheck("INT4", "a INT4");
         typeCheck("FLOAT4", "a FLOAT4");
         typeCheck("BPCHAR", "a BPCHAR");
+
+        System.out.println();
+        System.out.println("=== 7. 函数可用性实测（EXPLAIN 判定，nums.a 为 INT） ===");
+        funcCheck("nvl(a,0)", "nvl(a, 0)");
+        funcCheck("nvl2(a,1,0)", "nvl2(a, 1, 0)");
+        funcCheck("ifnull(a,0)", "ifnull(a, 0)");
+        funcCheck("coalesce(a,0)", "coalesce(a, 0)");
+        funcCheck("nullif(a,0)", "nullif(a, 0)");
+        funcCheck("decode(a,1,'x','y')", "decode(a, 1, 'x', 'y')");
+        funcCheck("strpos('abc','b')", "strpos('abc', 'b')");
+        funcCheck("instr('abc','b')", "instr('abc', 'b')");
+        funcCheck("position('b' in 'abc')", "position('b' in 'abc')");
+        funcCheck("substring('abc' from 1 for 2)", "substring('abc' from 1 for 2)");
+        funcCheck("substr('abc',1,2)", "substr('abc', 1, 2)");
+        funcCheck("to_char(current_date,'YYYY-MM-DD')", "to_char(current_date, 'YYYY-MM-DD')");
+        funcCheck("to_date('2026-01-01','YYYY-MM-DD')", "to_date('2026-01-01', 'YYYY-MM-DD')");
+        funcCheck("to_timestamp('2026-01-01 00:00:00','YYYY-MM-DD HH24:MI:SS')",
+                "to_timestamp('2026-01-01 00:00:00', 'YYYY-MM-DD HH24:MI:SS')");
+        funcCheck("to_number('12.5','999.9')", "to_number('12.5', '999.9')");
+        funcCheck("date_format(current_date,'yyyy-MM-dd')", "date_format(current_date, 'yyyy-MM-dd')");
+        funcCheck("date_trunc('month',current_date)", "date_trunc('month', current_date)");
+        funcCheck("date_trunc('MONTH',current_date)", "date_trunc('MONTH', current_date)");
+        funcCheck("date_part('month',current_date)", "date_part('month', current_date)");
+        funcCheck("extract(month from current_date)", "extract(month from current_date)");
+        funcCheck("string_agg(a,',')", "string_agg(a, ',')");
+        funcCheck("listagg(a,',')", "listagg(a, ',')");
+        funcCheck("array_agg(a)", "array_agg(a)");
+        funcCheck("collect_list(a)", "collect_list(a)");
+        funcCheck("concat_ws(',',collect_list(a))", "concat_ws(',', collect_list(a))");
+        funcCheck("concat('a',1)", "concat('a', 1)");
+        funcCheck("concat_ws('','a',1)", "concat_ws('', 'a', 1)");
+        funcCheck("sha256('x')", "sha256('x')");
+        funcCheck("sha2('x',256)", "sha2('x', 256)");
+        funcCheck("gen_random_uuid()", "gen_random_uuid()");
+        funcCheck("uuid()", "uuid()");
+        funcCheck("sysdate", "sysdate");
+        funcCheck("now()", "now()");
+        funcCheck("current_date", "current_date");
+        funcCheck("current_timestamp", "current_timestamp");
+        funcCheck("generate_series(1,3)", "generate_series(1, 3)");
+        funcCheck("sequence(1,3)", "sequence(1, 3)");
+        funcCheck("unnest(array(1,2))", "unnest(array(1, 2))");
+        funcCheck("explode(array(1,2))", "explode(array(1, 2))");
+        funcCheck("regexp_like('a','a')", "regexp_like('a', 'a')");
+        funcCheck("regexp_replace('a','a','b')", "regexp_replace('a', 'a', 'b')");
+        funcCheck("'a' ~ 'a'", "'a' ~ 'a'");
+        funcCheck("'a' ilike 'A'", "'a' ilike 'A'");
+        funcCheck("md5('x')", "md5('x')");
+        funcCheck("split_part('a,b',',',1)", "split_part('a,b', ',', 1)");
+        funcCheck("count(*) filter (where a>0)", "count(*) filter (where a > 0)");
+        funcCheck("percentile_cont(0.5) with group", "percentile_cont(0.5) WITHIN GROUP (ORDER BY a)");
+        funcCheck("cast(a as string)", "cast(a as string)");
+        funcCheck("a::string", "a::string");
+        funcCheck("(a + interval 1 day)", "a + interval 1 day");
+        funcCheck("cast('2026-01-01' as date) + interval '1' day",
+                "cast('2026-01-01' as date) + interval '1' day");
+
+        System.out.println();
+        System.out.println("=== 8. 可疑 FUNC_OK 的语义确认 ===");
+        value("decode(1,1,'a','b') 期望 a", "decode(1, 1, 'a', 'b')");
+        value("decode(2,1,'a','b') 期望 b", "decode(2, 1, 'a', 'b')");
+        value("decode(NULL,1,'a','b') 期望 b", "decode(CAST(NULL AS INT), 1, 'a', 'b')");
+        value("date_format 替代 to_char", "date_format(cast('2026-01-01' as date), 'yyyy-MM-dd')");
+        value("to_date 用 Java 格式", "to_date('2026-01-01', 'yyyy-MM-dd')");
+        agg("string_agg 含 NULL(期望 1,2)", "string_agg(cast(a as string), ',')");
+        agg("listagg 含 NULL", "listagg(cast(a as string), ',')");
+        agg("collect_list 含 NULL", "size(collect_list(a))");
+        value("nvl2(NULL,1,0) 期望 0", "nvl2(CAST(NULL AS INT), 1, 0)");
+
+        System.out.println();
+        System.out.println("=== 9. 日期格式 token 大小写陷阱 ===");
+        String ts = "cast('2026-01-01 13:05:07' as timestamp)";
+        value("HH24:MI:SS 直译（未翻译）", "date_format(" + ts + ", 'yyyy-MM-dd HH24:MI:SS')");
+        value("HH:mm:ss 正确翻译", "date_format(" + ts + ", 'yyyy-MM-dd HH:mm:ss')");
+        value("SS 未改成小写", "date_format(" + ts + ", 'yyyy-MM-dd HH:mm:SS')");
+        value("MI 未改成小写", "date_format(" + ts + ", 'yyyy-MM-dd HH:MI')");
+        value("YYYY-MM-DD 未翻译", "date_format(cast('2026-01-01' as date), 'YYYY-MM-DD')");
+
+        System.out.println();
+        System.out.println("=== 10. DDL 构造实测（对应真实语料中的写法） ===");
+        exec("COMMENT ON TABLE", "COMMENT ON TABLE probe_t IS '注释'");
+        exec("COMMENT ON COLUMN", "COMMENT ON COLUMN probe_t.a IS '注释'");
+        exec("CREATE VIEW", "CREATE VIEW v_probe AS SELECT 1 AS x");
+        exec("CREATE OR REPLACE VIEW", "CREATE OR REPLACE VIEW v_probe AS SELECT 1 AS x");
+        exec("CREATE TABLE AS SELECT", "CREATE TABLE t_ctas AS SELECT a FROM nums");
+        exec("CREATE TABLE LIKE", "CREATE TABLE t_like LIKE probe_t");
+        exec("WITH ORIENTATION 带引号", "CREATE TABLE t_orient (a INT) USING parquet WITH (ORIENTATION = 'COLUMN')");
+        exec("WITH ORIENTATION 不带引号", "CREATE TABLE t_orient2 (a INT) USING parquet WITH (ORIENTATION=COLUMN)");
+        exec("DISTRIBUTE BY HASH", "CREATE TABLE t_dist (a INT) DISTRIBUTE BY HASH(a)");
+        exec("PARTITION BY RANGE", "CREATE TABLE t_part (a INT) PARTITION BY RANGE (a)");
+        exec("DEFAULT nextval", "CREATE TABLE t_def (a BIGINT DEFAULT nextval('s'))");
+        exec("ALTER ADD COLUMN（openGauss 写法）", "ALTER TABLE probe_t ADD COLUMN c INT");
+        exec("ALTER ADD COLUMNS（Spark 写法）", "ALTER TABLE probe_t ADD COLUMNS (d INT)");
+        exec("TRUNCATE TABLE", "TRUNCATE TABLE probe_t");
+        exec("INSERT INTO ... SELECT", "INSERT INTO probe_t SELECT a, cast(a as string) FROM nums");
+        exec("ALTER COLUMN COMMENT（列注释的 Spark 写法）",
+                "ALTER TABLE probe_t ALTER COLUMN b COMMENT '列注释'");
+        exec("CREATE TABLE 无存储子句", "CREATE TABLE t_plain (a INT, b STRING)");
 
         spark.stop();
     }

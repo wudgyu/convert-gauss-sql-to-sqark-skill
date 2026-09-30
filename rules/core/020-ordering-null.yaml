@@ -1,0 +1,57 @@
+# 排序与 NULL 位置 —— 本规则库的头号语义漂移项
+#
+# 事实依据：checklist/spark-4.2.0-baseline.md 第四节（实测）
+
+spark_target: "4.2.0"
+
+rules:
+  - id: core.orderby.nulls-default
+    title: ORDER BY 默认 NULL 位置与 openGauss 相反
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: auto
+    confidence: deterministic
+    risk: medium
+    priority: 500
+    scope:
+      spark: ["4.2.0"]
+      statement: [SELECT, INSERT, CREATE_TABLE_AS, CREATE_VIEW, CREATE_UNKNOWN]
+      positions:
+        - "SELECT 语句末尾的 ORDER BY"
+        - "窗口函数 OVER (... ORDER BY ...)"
+        - "Hive 风格的 SORT BY"
+    when: |
+      语句中出现 ORDER BY / SORT BY，且某个排序项没有显式写出 NULLS FIRST 或 NULLS LAST。
+      只要缺少显式声明，行为就一定与源端不同，不必判断数据里是否真有 NULL。
+    action: |
+      为每个缺少 NULLS 子句的排序项补上保持 openGauss 语义的写法：
+        - 升序（含省略方向）→ 追加 NULLS LAST
+        - 降序 DESC        → 追加 NULLS FIRST
+
+      执行步骤：
+        1. 按排序键列表的顶层逗号切分。括号内的逗号不是分隔符，
+           例如 ORDER BY coalesce(a, b), c 只有两个排序项。
+        2. 已经写了 NULLS FIRST / NULLS LAST 的项原样保留，不得重复追加。
+        3. 只追加 NULLS 子句，不得改动排序表达式、方向或顺序。
+        4. 窗口函数内的排序同样处理，不能只处理语句末尾的那个 ORDER BY。
+    examples:
+      - {input: "ORDER BY order_id", output: "ORDER BY order_id NULLS LAST"}
+      - {input: "ORDER BY created_at DESC", output: "ORDER BY created_at DESC NULLS FIRST"}
+      - {input: "ORDER BY a, b DESC", output: "ORDER BY a NULLS LAST, b DESC NULLS FIRST"}
+      - input: "ORDER BY coalesce(a, b), c"
+        output: "ORDER BY coalesce(a, b) NULLS LAST, c NULLS LAST"
+        note: "括号内逗号不是分隔符"
+      - input: "row_number() OVER (PARTITION BY order_id ORDER BY sku)"
+        output: "row_number() OVER (PARTITION BY order_id ORDER BY sku NULLS LAST)"
+        note: "窗口排序不补会改变 row_number 取值，进而改变去重结果"
+      - {input: "ORDER BY a NULLS FIRST", output: "ORDER BY a NULLS FIRST", note: "已显式声明，保持不变"}
+    evidence: |
+      实测（analyzed / physical plan 原文）：
+        ORDER BY a            -> Sort [a#14 ASC NULLS FIRST]
+        ORDER BY a DESC       -> Sort [a#27 DESC NULLS LAST]
+        ORDER BY a NULLS LAST -> Sort [a#40 ASC NULLS LAST]
+      openGauss/PostgreSQL 的默认是升序 NULLS LAST、降序 NULLS FIRST，与 Spark 完全相反。
+    notes: |
+      为什么归入 auto：这是纯粹为保持源端语义而做的机械补齐，方向明确、可逐项核对，
+      不需要人工判断；不补齐反而会静默改变结果集顺序，且不会报任何错。

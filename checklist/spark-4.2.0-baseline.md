@@ -143,3 +143,84 @@ Sort [a#40 ASC NULLS LAST], true, 0       <- ORDER BY a NULLS LAST（显式）
    必须映射为显式精度（推荐 `DECIMAL(38,18)`）并归入 `confirm` 档要求人工确认。
 2. **`text` 在 Spark 里不是合法类型名**。它是最常见的 openGauss 类型之一，
    漏映射会直接解析失败——好处是这类错误一定会被引擎拦下，不会静默通过。
+
+## 八、函数可用性实测（EXPLAIN 判定）
+
+本节结论与「PG 专有语法在 Spark 上不可用」的直觉**多处相反**，全部以实测为准。
+
+### 原生可用，禁止改写
+
+`nvl` / `nvl2` / `ifnull` / `coalesce` / `nullif` / **`decode` 条件式写法** /
+**`string_agg`** / **`listagg`** / `array_agg` / `instr` / `position(x in y)` /
+**`substring(x from a for b)`** / `substr` / `to_number` / `date_trunc`（含小写单位）/
+`date_part` / `extract` / `regexp_like` / `regexp_replace` / `count(*) FILTER` /
+`split_part` / `md5` / `now` / `current_date` / `current_timestamp` / `ilike` / `uuid()`
+
+两个直接影响规则集的取值验证：
+
+- `decode(1,1,'a','b')=a`、`decode(2,1,'a','b')=b`、`decode(NULL,1,'a','b')=b`——
+  Oracle 风格的条件式 `decode` 在 Spark 4.2 语义一致，**不需要展开成 CASE WHEN**。
+- `string_agg` 对含 `[1, 2, NULL]` 的列返回 `1,2`（忽略 NULL），与 openGauss 一致，
+  **不需要改写成 `concat_ws` + `collect_list`**。
+
+### 必须改写
+
+| openGauss 写法 | Spark 结果 | 改写为 |
+|---|---|---|
+| `strpos(a, b)` | 分析期报错 | `instr(a, b)`，参数顺序一致 |
+| `sha256(x)` | 分析期报错 | `sha2(x, 256)` |
+| `gen_random_uuid()` | 分析期报错 | `uuid()` |
+| `sysdate` | 分析期报错 | `current_timestamp()` |
+| `unnest(x)` | 分析期报错 | `explode(x)` |
+| `generate_series(a, b)` | 分析期报错 | `explode(sequence(a, b))` |
+| `a ~ 'p'` / `a !~ 'p'` | 解析报错 | `a RLIKE 'p'` / `NOT (a RLIKE 'p')` |
+| `to_char(...)` | 分析期报错 | `date_format(...)`，格式串需翻译 |
+
+### 一个必须记住的陷阱
+
+**`collect_list` 会丢弃 NULL。** 对含 `[1, 2, NULL]` 的列，`collect_list` 的结果
+`size=2`，而 `array_agg` 保留三个元素并原生可用。把 `array_agg` 改写成
+`collect_list` 会静默丢数据——这类「看起来等价的改写反而更危险」是本规则库
+专门用 note 类规则禁止改写的场景。
+
+## 九、日期格式 token 实测
+
+对时间戳 `2026-01-01 13:05:07` 实测：
+
+| 写法 | 结果 | 性质 |
+|---|---|---|
+| `'yyyy-MM-dd HH:mm:ss'` | `2026-01-01 13:05:07` | 正确 |
+| `'yyyy-MM-dd HH:mm:SS'` | `2026-01-01 13:05:00` | **静默错误**，大写 S 被当成秒的小数位 |
+| `'yyyy-MM-dd HH24:MI:SS'` | `INVALID_DATETIME_PATTERN` | 报错拦截 |
+| `'yyyy-MM-dd HH:MI'` | `INVALID_DATETIME_PATTERN` | 报错拦截 |
+| `'YYYY-MM-DD'` | `INCONSISTENT_BEHAVIOR_CROSS_VERSION` | 报错拦截 |
+
+结论有三条：
+
+1. **`SS` 必须改成小写 `ss`**，这是唯一一处静默出错的大小写陷阱。
+2. **`MI` 必须改成小写 `mm`**，不改会报错（大写 MM 在 Java 里是月份）。
+3. **`HH24` 与 `HH` 的翻译方向相反**：源端 `HH` 是 12 小时制、要翻译成小写 `hh`；
+   源端 `HH24` 才对应大写 `HH`。
+
+## 十、DDL 构造实测
+
+| 构造 | 结果 | 处置 |
+|---|---|---|
+| `COMMENT ON TABLE` | 执行成功 | 原样保留 |
+| `COMMENT ON COLUMN 表.列` | `PARSE_SYNTAX_ERROR` | 改为 `ALTER TABLE 表 ALTER COLUMN 列 COMMENT` |
+| `ALTER TABLE ... ALTER COLUMN ... COMMENT` | 执行成功 | 列注释的目标写法 |
+| `CREATE TABLE ... WITH (ORIENTATION=COLUMN)` | `PARSE_SYNTAX_ERROR`（加不加引号都一样） | 移除存储子句 |
+| `CREATE TABLE ... DISTRIBUTE BY HASH(a)` | `PARSE_SYNTAX_ERROR` | 移除，分布策略待人工确认 |
+| `SELECT ... DISTRIBUTE BY a` | **解析成功**（Spark 视为重分区） | 必须移除，属静默漂移 |
+| `CREATE TABLE ... PARTITION BY RANGE (a)` | `PARSE_SYNTAX_ERROR` | 人工改写分区策略 |
+| `DEFAULT nextval('seq')` | `UNRESOLVED_ROUTINE: nextval` | 移除默认值，键值生成上移到写入侧 |
+| `CREATE VIEW` / `CREATE OR REPLACE VIEW` | 执行成功 | 原样保留 |
+| `CREATE TABLE ... AS SELECT` | 执行成功 | 原样保留 |
+| `CREATE TABLE ... LIKE 源表` | 执行成功 | 原样保留 |
+| `ALTER TABLE ... ADD COLUMN`（单数） | 执行成功 | 原样保留 |
+| `ALTER TABLE ... ALTER COLUMN ... TYPE` | 执行成功 | 原样保留 |
+| `TRUNCATE TABLE` | 执行成功 | 原样保留 |
+
+**`DISTRIBUTE BY` 是本节的要点**：同一种写法在建表语句里是硬解析错误，
+在查询语句里却能解析成功并变成重分区。前者会被引擎拦下，后者会静默改变语义，
+因此规则要求一律移除，不允许依赖引擎报错来兜底。

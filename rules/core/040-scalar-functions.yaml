@@ -1,0 +1,215 @@
+# 标量函数映射
+#
+# 事实依据：checklist/spark-4.2.0-baseline.md 第七节（实测）
+#
+# 本文件同时记录「哪些函数不需要改写」。实测推翻了多处凭直觉的假设，
+# 若将来有人想顺手把 nvl 改成 coalesce、把 decode 展开成 CASE WHEN，
+# 请先看 core.functions.native 的实测清单。
+
+spark_target: "4.2.0"
+
+rules:
+  - id: core.functions.native
+    title: 原生可用、禁止改写的函数清单
+    version: "1.0.0"
+    status: enabled
+    kind: note
+    tier: auto
+    confidence: deterministic
+    risk: low
+    scope:
+      spark: ["4.2.0"]
+    when: "语句中出现下列任一函数或写法。"
+    action: |
+      一律原样保留，不得改写。这些构造在 Spark 4.2.0 上原生可用且语义一致，
+      改写只会引入不必要的风险。
+    entries:
+      - nvl(a, b)
+      - nvl2(a, b, c)
+      - ifnull(a, b)
+      - coalesce(a, b)
+      - nullif(a, b)
+      - "decode(a, s1, r1, s2, r2, default) 条件式写法"
+      - "string_agg(a, ',')"
+      - "listagg(a, ',')"
+      - array_agg(a)
+      - instr(a, b)
+      - position(b in a)
+      - substring(a from 1 for 2)
+      - substr(a, 1, 2)
+      - "to_number(a, '999.9')"
+      - "date_trunc('month', a) 小写单位"
+      - "date_part('month', a)"
+      - extract(month from a)
+      - regexp_like(a, p)
+      - regexp_replace(a, p, r)
+      - count(*) filter (where ...)
+      - "split_part(a, ',', 1)"
+      - md5(a)
+      - now() / current_date / current_timestamp
+      - "a ilike b"
+    examples:
+      - {input: "nvl(order_total, 0)", output: "nvl(order_total, 0)", note: "不要改为 coalesce"}
+      - {input: "decode(status, 'NEW', 1, 0)", output: "decode(status, 'NEW', 1, 0)", note: "不要展开成 CASE WHEN"}
+    evidence: |
+      实测全部通过 EXPLAIN 与取值验证，包括：
+        decode(1, 1, 'a', 'b') = a；decode(2, 1, 'a', 'b') = b；
+        decode(NULL, 1, 'a', 'b') = b（NULL 处理与 Oracle 一致）
+        string_agg 对含 [1, 2, NULL] 的列返回 '1,2'（忽略 NULL，与 openGauss 一致）
+      date_trunc 的单位大小写均可（'month' 与 'MONTH' 都通过），无需转换大小写。
+    notes: |
+      这些结论与「PG 专有语法在 Spark 上不可用」的直觉相反，全部以实测为准。
+      凡要在此清单上增删，必须先在目标版本上重跑 validation/SparkBaselineProbe.java。
+
+  - id: core.functions.strpos
+    title: strpos 改为 instr
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: auto
+    confidence: deterministic
+    risk: low
+    priority: 200
+    scope:
+      spark: ["4.2.0"]
+    when: "语句中出现 strpos(。"
+    action: |
+      改写为 instr(a, b)。两者参数顺序一致（被查找串在前、子串在后），
+      返回位置都是 1 起算，未找到都返回 0。
+    examples:
+      - {input: "strpos(order_note, 'urgent')", output: "instr(order_note, 'urgent')"}
+    evidence: "实测：strpos 分析期报错不可用；instr('abc','b') 通过"
+    notes: |
+      不要与 position(x in y) 混淆：position 的参数顺序相反，但它在 Spark 原生可用，无需改写。
+
+  - id: core.functions.sha256
+    title: sha256 改为 sha2(x, 256)
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: auto
+    confidence: deterministic
+    risk: low
+    priority: 200
+    scope:
+      spark: ["4.2.0"]
+    when: "语句中出现 sha256(。"
+    action: "改写为 sha2(参数, 256)，返回十六进制字符串，与 sha256 一致。"
+    examples:
+      - {input: "sha256(payload)", output: "sha2(payload, 256)"}
+    evidence: "实测：sha256 分析期报错；sha2('x', 256) 通过"
+
+  - id: core.functions.gen-random-uuid
+    title: gen_random_uuid 改为 uuid
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: auto
+    confidence: deterministic
+    risk: low
+    priority: 200
+    scope:
+      spark: ["4.2.0"]
+    when: "语句中出现 gen_random_uuid()。"
+    action: "改写为 uuid()。两者都返回随机 UUID 字符串。"
+    examples:
+      - {input: "gen_random_uuid()", output: "uuid()"}
+    evidence: "实测：gen_random_uuid 分析期报错；uuid() 通过"
+
+  - id: core.functions.sysdate
+    title: sysdate 改为 current_timestamp()
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: auto
+    confidence: deterministic
+    risk: low
+    priority: 200
+    scope:
+      spark: ["4.2.0"]
+    when: "语句中出现 sysdate。"
+    action: |
+      改写为 current_timestamp()。openGauss 的 sysdate 取语句时刻，
+      current_timestamp 取事务开始时刻，同一语句内两者等价。
+    examples:
+      - {input: "WHERE updated_at < sysdate", output: "WHERE updated_at < current_timestamp()"}
+    evidence: "实测：sysdate 分析期报错；now()、current_timestamp 通过"
+
+  - id: core.functions.unnest
+    title: unnest 改为 explode
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: confirm
+    confidence: deterministic
+    risk: medium
+    priority: 250
+    scope:
+      spark: ["4.2.0"]
+    when: "语句中出现 unnest(。"
+    action: |
+      改写为 explode()。若出现在 FROM 子句，等价改写为 LATERAL explode(...)；
+      若出现在 SELECT 列表，需确认是否会产生多行（生成器语义），必须人工确认后定稿。
+    examples:
+      - {input: "SELECT unnest(tags) FROM products", output: "SELECT explode(tags) FROM products"}
+    evidence: "实测：unnest(array(1,2)) 分析期报错；explode(array(1,2)) 通过"
+
+  - id: core.functions.generate-series
+    title: generate_series 改为 explode(sequence(...))
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: confirm
+    confidence: heuristic
+    risk: medium
+    priority: 250
+    scope:
+      spark: ["4.2.0"]
+    when: "语句中出现 generate_series(。"
+    action: |
+      改写为 explode(sequence(a, b[, step]))，通常需要配合 FROM 或 LATERAL 子句。
+      步长语义、边界包含关系、时间戳序列的写法都必须人工确认。
+    examples:
+      - {input: "SELECT generate_series(1, 3)", output: "SELECT explode(sequence(1, 3))"}
+    evidence: "实测：generate_series 分析期报错；sequence(1,3) 通过"
+
+  - id: core.functions.regex-operator
+    title: 正则匹配运算符
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: confirm
+    confidence: deterministic
+    risk: medium
+    priority: 250
+    scope:
+      spark: ["4.2.0"]
+    when: "语句中出现 ~ / !~ / ~* 正则匹配运算符。"
+    action: |
+      - a ~  'p'  → a RLIKE 'p'
+      - a !~ 'p'  → NOT (a RLIKE 'p')
+      - a ~* 'p'  → 大小写不敏感匹配，Spark 无直接等价写法，
+        需改写为 lower(a) RLIKE lower('p')，且必须人工确认大小写与转义行为
+    examples:
+      - {input: "WHERE order_note ~ 'urgent'", output: "WHERE order_note RLIKE 'urgent'"}
+      - {input: "WHERE order_note !~ 'test'", output: "WHERE NOT (order_note RLIKE 'test')"}
+    evidence: "实测：'a' ~ 'a' 触发 PARSE_SYNTAX_ERROR；regexp_like 与 rlike 可用"
+
+  - id: core.functions.pg-catalog
+    title: 实例内省函数
+    version: "1.0.0"
+    status: enabled
+    kind: block
+    tier: blocked
+    confidence: deterministic
+    risk: high
+    priority: 300
+    scope:
+      spark: ["4.2.0"]
+    when: "语句中出现 pg_* 系统函数、version()、current_setting(、pg_typeof( 等实例内省函数。"
+    action: |
+      阻断。这些函数依赖 PostgreSQL 的系统目录与实例状态，Spark 没有对应实现。
+      需人工确认该语句的运维或诊断用途，通常可从交付脚本中剔除。
+    examples:
+      - {input: "SELECT pg_typeof(order_id) FROM orders", output: "阻断，人工确认"}
+    evidence: "系统目录属于实例内省能力，Spark SQL 无对应函数族"

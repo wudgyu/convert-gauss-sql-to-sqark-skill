@@ -1,0 +1,74 @@
+# NULL 语义差异
+#
+# 事实依据：checklist/spark-4.2.0-baseline.md 第四、八节（实测）
+
+spark_target: "4.2.0"
+
+rules:
+  - id: core.concat.null-semantics
+    title: concat 遇 NULL 的行为与 openGauss 不同
+    version: "1.0.0"
+    status: enabled
+    kind: rewrite
+    tier: confirm
+    confidence: deterministic
+    risk: medium
+    priority: 300
+    scope:
+      spark: ["4.2.0"]
+      statement: [SELECT, INSERT, UPDATE, CREATE_TABLE_AS, CREATE_VIEW]
+    when: "语句中出现 concat( 函数调用。注意不要匹配到 concat_ws 或 concat 的前缀。"
+    action: |
+      改写为 concat_ws('', ...)：第一个参数固定为空字符串作为分隔符，其余参数顺序不变。
+
+      必须人工确认的前提：所有参数都是标量（字符串、数值、日期）。
+      Spark 的 concat 还接受数组与二进制参数，此时它是分段拼接，而 concat_ws 不接受，
+      参数含数组或二进制时改写会改变语义，这种情况下应阻断而不是改写。
+    examples:
+      - input: "concat(first_name, ' ', last_name)"
+        output: "concat_ws('', first_name, ' ', last_name)"
+      - {input: "concat('a', NULL)", output: "concat_ws('', 'a', NULL)"}
+    evidence: |
+      实测：Spark 的 concat('a', NULL) 返回 NULL，而 concat_ws('', 'a', NULL) 返回 'a'；
+      openGauss/PostgreSQL 的 concat 忽略 NULL，返回 'a'。改写后与源端一致。
+      另实测 concat('a', 1) 与 concat_ws('', 'a', 1) 在 Spark 均可用，标量参数不受影响。
+
+  - id: core.array-agg.keep
+    title: array_agg 不得改写为 collect_list
+    version: "1.0.0"
+    status: enabled
+    kind: note
+    tier: auto
+    confidence: deterministic
+    risk: high
+    scope:
+      spark: ["4.2.0"]
+    when: "语句中出现 array_agg(。"
+    action: |
+      原样保留，不要改写。array_agg 在 Spark 4.2 原生可用。
+      严禁改写为 collect_list 或 collect_set。
+    examples:
+      - {input: "array_agg(sku)", output: "array_agg(sku)", note: "保持不变"}
+    evidence: |
+      实测：array_agg 通过分析期检查并可执行；
+      而 collect_list 会丢弃 NULL —— 对含 [1, 2, NULL] 的列，collect_list 的结果 size=2，
+      array_agg 保留三个元素。把 array_agg 改成 collect_list 会静默丢数据。
+    notes: |
+      这是「看似等价的改写反而更危险」的典型例子，规则刻意写成禁止改写。
+
+  - id: core.greatest-least.aligned
+    title: GREATEST / LEAST 的 NULL 处理已对齐
+    version: "1.0.0"
+    status: enabled
+    kind: note
+    tier: auto
+    confidence: deterministic
+    risk: low
+    scope:
+      spark: ["4.2.0"]
+    when: "语句中出现 greatest( 或 least(。"
+    action: "原样保留，无需任何处理。不要在报告中把它列为风险项。"
+    examples:
+      - {input: "greatest(a, b)", output: "greatest(a, b)"}
+    evidence: "实测：greatest(1, NULL)=1、least(1, NULL)=1，二者均忽略 NULL，与 openGauss 一致"
+    notes: "该行为在 Spark 3.x 与 4.x 之间曾不同，本结论仅对 4.2.0 成立。"
